@@ -4,7 +4,7 @@ This mod blends various projections to allow FOV to be set up to 400° and still
 
 > Note: \
 > **FOV mismatch:** Vanilla's slider sets a vertical FOV while the projection shader works in horizontal FOV, so the same number maps to a different angular extent depending on your aspect ratio and which projection stage you're in. \
-> **Performance:** Rendering a full surround view can take up to six world passes per frame instead of one (can decrease FPS)
+> **Performance:** Rendering a full surround view can take up to six world passes per frame instead of one (can decrease FPS) \
 > **Bugs:** Several rendering edge cases (billboard/particle handling, shader mod compatibility, untested corner geometry, etc.) haven't been verified in-game yet
 
 Get it on Modrinth [360 FOV](https://modrinth.com/project/360-fov)
