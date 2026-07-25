@@ -1,0 +1,33 @@
+{
+	"required": true,
+	"package": "xpncvr.fov360.mixin",
+	"compatibilityLevel": "JAVA_21",
+	"client": [
+		"BillboardParticleMixin",
+		"CameraAccessor",
+		"CameraMixin",
+		"ConduitBlockEntityRendererMixin",
+		"DragonFireballEntityRendererMixin",
+		"EntityRenderManagerMixin",
+		"EntityRendererMixin",
+		"ExperienceOrbEntityRendererMixin",
+		"FireworkRocketEntityRendererMixin",
+		"FishingBobberEntityRendererMixin",
+		"FlyingItemEntityRendererMixin",
+		"GameOptionsMixin",
+		"GameRendererInvoker",
+		"GameRendererMixin",
+		"GuiRendererMixin",
+		"LabelCommandRendererCommandsMixin",
+		"MinecraftClientMixin",
+		"MouseMixin",
+		"ParticleAccessor",
+		"StandardFogModifierMixin",
+		"WindowMixin",
+		"WorldRendererAccessor",
+		"WorldRendererMixin"
+	],
+	"injectors": {
+		"defaultRequire": 1
+	}
+}

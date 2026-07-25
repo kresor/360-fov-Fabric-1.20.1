@@ -1,0 +1,42 @@
+package xpncvr.fov360.mixin;
+
+import com.mojang.blaze3d.buffers.GpuBufferSlice;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gui.render.GuiRenderer;
+import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
+import xpncvr.fov360.Fov360Renderer;
+
+@Mixin(GuiRenderer.class)
+public abstract class GuiRendererMixin {
+
+	@ModifyArg(
+		method = "renderPreparedDraws",
+		at = @At(
+			value = "INVOKE",
+			target = "Lcom/mojang/blaze3d/systems/RenderSystem;setProjectionMatrix(Lcom/mojang/blaze3d/buffers/GpuBufferSlice;Lcom/mojang/blaze3d/systems/ProjectionType;)V"),
+		index = 0)
+	private GpuBufferSlice panini$rightHalfProjection(GpuBufferSlice original) {
+		if (Fov360Renderer.splitGuiOnRight()) {
+			GpuBufferSlice slice = Fov360Renderer.rightHalfGuiProjection(MinecraftClient.getInstance().getWindow());
+			if (slice != null) {
+				return slice;
+			}
+		}
+		return original;
+	}
+
+	@ModifyArg(
+		method = "enableScissor",
+		at = @At(
+			value = "INVOKE",
+			target = "Lcom/mojang/blaze3d/systems/RenderPass;enableScissor(IIII)V"),
+		index = 0)
+	private int panini$scissorRightShift(int x) {
+		if (Fov360Renderer.splitGuiOnRight()) {
+			return x + MinecraftClient.getInstance().getWindow().getFramebufferWidth() / 2;
+		}
+		return x;
+	}
+}

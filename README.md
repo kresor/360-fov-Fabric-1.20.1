@@ -18,6 +18,7 @@ Get it on Modrinth [360 FOV](https://modrinth.com/project/360-fov)
   <img width="960" height="526" alt="400° with mod" src="https://github.com/user-attachments/assets/ea350dca-4905-4ef3-a986-ab85eec866d1" />
   <br><b>280°</b><br>
   <img width="960" height="526" alt="280° with mod" src="https://github.com/user-attachments/assets/74525003-9442-44bf-bb1c-b1ec8d778d97" />
+
 </details>
 
 ## What it does
@@ -30,7 +31,8 @@ shader switches through a chain of projections:
 | --- | --- |
 | below 90 | Rectilinear, vanilla projection |
 | 90 to 160 | Cross-fade rectilinear into the Panini/stereographic hybrid |
-| 160 to 300 | Cross-fade the hybrid into Mercator |
+| 160 to 220 | Cross-fade the hybrid into fisheye (azimuthal equidistant) |
+| 220 to 300 | Cross-fade fisheye into Mercator |
 | 300 to 340 | Pure Mercator |
 | 340 to 360 | Linear cross-fade Mercator into equirectangular |
 | 360 and above | Equirectangular, the full sphere is shown at 360, past it the view wraps |
@@ -42,7 +44,7 @@ keybind or toggle, it's a drop-in replacement for how the world is rendered at w
 
 ## Config
 
-`config/paniniprojection.json` is created on first launch and read once per session (edits need a
+`config/fov360.json` is created on first launch and read once per session (edits need a
 restart):
 
 | Key | Default | Effect |

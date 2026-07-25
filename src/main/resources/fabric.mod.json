@@ -1,0 +1,28 @@
+{
+	"schemaVersion": 1,
+	"id": "fov360",
+	"version": "${version}",
+	"name": "360 FOV",
+	"description": "Renders the world at different projections to allow high FOV using cubemap capture and reprojection",
+	"authors": [
+		"xpncvr"
+	],
+	"contact": {
+		"homepage": "https://github.com/xpncvr/fov360",
+		"sources": "https://github.com/xpncvr/fov360"
+	},
+	"license": "AGPL-3.0-or-later",
+	"icon": "assets/fov360/icon.png",
+	"mixins": [
+		"fov360.mixins.json"
+	],
+	"depends": {
+		"minecraft": "~1.21.10",
+		"java": ">=21"
+	},
+    "entrypoints": {
+      "main": [
+        "xpncvr.fov360.Main"
+      ]
+    }
+}
