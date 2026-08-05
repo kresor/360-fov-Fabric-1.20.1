@@ -23,7 +23,7 @@ public abstract class BillboardParticleMixin {
 			&& (rotator == BillboardParticle.Rotator.ALL_AXIS || rotator == BillboardParticle.Rotator.Y_AND_W_ONLY);
 		if (standard) {
 			ParticleAccessor self = (ParticleAccessor) this;
-			Vec3d eye = camera.getPos();
+			Vec3d eye = camera.getCameraPos();
 			double px = MathHelper.lerp((double) tickProgress, self.panini$getLastX(), self.panini$getX());
 			double py = MathHelper.lerp((double) tickProgress, self.panini$getLastY(), self.panini$getY());
 			double pz = MathHelper.lerp((double) tickProgress, self.panini$getLastZ(), self.panini$getZ());

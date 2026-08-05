@@ -18,6 +18,7 @@ import net.minecraft.client.gl.RenderPipelines;
 import net.minecraft.client.gl.SimpleFramebuffer;
 import net.minecraft.client.gl.UniformType;
 import net.minecraft.client.render.Camera;
+import net.minecraft.client.render.CameraOverride;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.render.RenderTickCounter;
 import net.minecraft.client.util.Window;
@@ -223,7 +224,7 @@ public final class Fov360Renderer {
 			int lowSize = config().lowResTopBottomFaces ? halvedSize(fullSize) : fullSize;
 			ensureResources(fullSize, lowSize, centerFace);
 
-			gameRenderer.setRenderingPanorama(true);
+			gameRenderer.setCameraOverride(new CameraOverride(new Vector3f(captureViewForward)));
 			capturing = true;
 			beginOutlineCapture(client);
 
@@ -233,6 +234,7 @@ public final class Fov360Renderer {
 				}
 				captureFaceYaw = faceYaw(viewYaw, k);
 				captureFacePitch = facePitch(k);
+				((CameraAccessor) realCamera).panini$setRotation(captureFaceYaw, captureFacePitch);
 				currentTarget = faces[k];
 				if (outlineRedirect != null) {
 					outlineRedirect.panini$setEntityOutlineFramebuffer(outlineFaces[k]);
@@ -243,6 +245,7 @@ public final class Fov360Renderer {
 
 			currentTarget = null;
 			capturing = false;
+			((CameraAccessor) realCamera).panini$setRotation(viewYaw, viewPitch);
 			endOutlineCapture();
 
 			reproject(client, viewPitch, outH, projW, aspect, split, invert, fovx);
@@ -257,7 +260,7 @@ public final class Fov360Renderer {
 		} finally {
 			currentTarget = null;
 			capturing = false;
-			gameRenderer.setRenderingPanorama(false);
+			gameRenderer.setCameraOverride(null);
 			endOutlineCapture();
 			outlineRedirect = null;
 		}
@@ -485,17 +488,14 @@ public final class Fov360Renderer {
 			}
 			if (outlineFaces[k] == null) {
 				outlineFaces[k] = new SimpleFramebuffer("fov360_outline_" + k, target, target, true);
-				outlineFaces[k].setFilter(FilterMode.NEAREST);
 				outlineFaceSizes[k] = target;
 			} else if (outlineFaceSizes[k] != target) {
 				outlineFaces[k].resize(target, target);
-				outlineFaces[k].setFilter(FilterMode.NEAREST);
 				outlineFaceSizes[k] = target;
 			}
 			if (faceSizes[k] == target) {
 				continue;
 			}
-			faces[k].setFilter(FilterMode.NEAREST);
 			faceSizes[k] = target;
 		}
 
@@ -581,7 +581,7 @@ public final class Fov360Renderer {
 			pass.setUniform("PaniniConfig", ubo);
 			for (int i = 0; i < 6; i++) {
 				Framebuffer f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
-				pass.bindSampler("Face" + i + "Sampler", f.getColorAttachmentView());
+				pass.bindTexture("Face" + i + "Sampler", f.getColorAttachmentView(), RenderSystem.getSamplerCache().get(FilterMode.NEAREST));
 			}
 			pass.draw(0, 3);
 		}
@@ -609,7 +609,7 @@ public final class Fov360Renderer {
 	}
 
 	private void renderHand(MinecraftClient client, GameRenderer gameRenderer, float tickProgress) {
-		gameRenderer.setRenderingPanorama(false);
+		gameRenderer.setCameraOverride(null);
 
 		GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
 		Camera camera = gameRenderer.getCamera();

@@ -22,7 +22,6 @@
 		"MinecraftClientMixin",
 		"MouseMixin",
 		"ParticleAccessor",
-		"StandardFogModifierMixin",
 		"WindowMixin",
 		"WorldRendererAccessor",
 		"WorldRendererMixin"
