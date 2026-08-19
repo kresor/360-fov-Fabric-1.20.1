@@ -5,7 +5,7 @@ import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.buffers.Std140Builder;
 import com.mojang.blaze3d.systems.GpuDevice;
 import com.mojang.blaze3d.systems.RenderSystem;
-import net.minecraft.client.util.Window;
+import com.mojang.blaze3d.platform.Window;
 import org.joml.Matrix4f;
 import org.lwjgl.system.MemoryStack;
 
@@ -19,8 +19,8 @@ public final class Fov360GuiProjection {
 	private GpuDevice bufferDevice = null;
 
 	GpuBufferSlice slice(Window window) {
-		float w = (float) window.getFramebufferWidth() / window.getScaleFactor();
-		float h = (float) window.getFramebufferHeight() / window.getScaleFactor();
+		float w = (float) window.getWidth() / window.getGuiScale();
+		float h = (float) window.getHeight() / window.getGuiScale();
 
 		GpuDevice device = RenderSystem.getDevice();
 		if (buffer == null || bufferDevice != device) {

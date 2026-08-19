@@ -1,83 +1,50 @@
 package xpncvr.fov360.mixin;
 
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.render.Camera;
-import net.minecraft.client.render.GameRenderer;
-import net.minecraft.client.render.RenderTickCounter;
-import net.minecraft.client.util.math.MatrixStack;
-import org.joml.Matrix4f;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import xpncvr.fov360.Fov360Renderer;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
 
-	@Inject(method = "renderWorld", at = @At("HEAD"), cancellable = true)
-	private void panini$driveWorld(RenderTickCounter tickCounter, CallbackInfo ci) {
+	@Inject(method = "renderLevel", at = @At("HEAD"), cancellable = true)
+	private void panini$driveLevel(DeltaTracker deltaTracker, CallbackInfo ci) {
 		if (Fov360Renderer.capturing) {
 			return;
 		}
-		MinecraftClient client = MinecraftClient.getInstance();
+		Minecraft client = Minecraft.getInstance();
 		if (!Fov360Renderer.INSTANCE.shouldRun(client)) {
 			return;
 		}
-		if (Fov360Renderer.INSTANCE.runFrame((GameRenderer) (Object) this, tickCounter)) {
+		if (Fov360Renderer.INSTANCE.runFrame((GameRenderer) (Object) this, deltaTracker)) {
 			ci.cancel();
 		}
 	}
 
-	@Inject(method = "getBasicProjectionMatrix", at = @At("HEAD"), cancellable = true)
-	private void panini$projectionFov(float fovDegrees, CallbackInfoReturnable<Matrix4f> cir) {
-		GameRenderer self = (GameRenderer) (Object) this;
+	@Inject(method = "renderItemInHand", at = @At("HEAD"), cancellable = true)
+	private void panini$cancelHandDuringCapture(CameraRenderState cameraState, float deltaPartialTick,
+			org.joml.Matrix4fc modelViewMatrix, CallbackInfo ci) {
 		if (Fov360Renderer.capturing) {
-			cir.setReturnValue(new Matrix4f().perspective(
-				Math.min(fovDegrees, 90.0F) * (float) (Math.PI / 180.0),
-				1.0F,
-				0.05F,
-				self.getFarPlaneDistance()));
-		} else if (fovDegrees > 150.0F) {
-			MinecraftClient client = MinecraftClient.getInstance();
-			float aspect = (float) client.getWindow().getFramebufferWidth()
-				/ (float) client.getWindow().getFramebufferHeight();
-			cir.setReturnValue(new Matrix4f().perspective(
-				150.0F * (float) (Math.PI / 180.0),
-				aspect,
-				0.05F,
-				self.getFarPlaneDistance()));
-		}
-	}
-
-	@Inject(method = "getProjectionMatrix", at = @At("HEAD"), cancellable = true)
-	private void panini$captureCullFov(float fovDegrees, CallbackInfoReturnable<Matrix4f> cir) {
-		if (Fov360Renderer.capturing) {
-			cir.setReturnValue(new Matrix4f().perspective(
-				110.0F * (float) (Math.PI / 180.0),
-				1.0F,
-				0.05F,
-				((GameRenderer) (Object) this).getFarPlaneDistance()));
-		}
-	}
-
-	@Inject(method = "getFov", at = @At("RETURN"), cancellable = true)
-	private void panini$clampVanillaFov(Camera camera, float tickProgress, boolean changingFov, CallbackInfoReturnable<Float> cir) {
-		if (cir.getReturnValueF() > 150.0F) {
-			cir.setReturnValue(150.0F);
+			ci.cancel();
 		}
 	}
 
 	@Inject(method = "bobView", at = @At("HEAD"), cancellable = true)
-	private void panini$cancelBob(MatrixStack matrices, float tickProgress, CallbackInfo ci) {
+	private void panini$cancelBob(CameraRenderState cameraState, PoseStack poseStack, CallbackInfo ci) {
 		if (Fov360Renderer.capturing) {
 			ci.cancel();
 		}
 	}
 
-	@Inject(method = "tiltViewWhenHurt", at = @At("HEAD"), cancellable = true)
-	private void panini$cancelTilt(MatrixStack matrices, float tickProgress, CallbackInfo ci) {
+	@Inject(method = "bobHurt", at = @At("HEAD"), cancellable = true)
+	private void panini$cancelTilt(CameraRenderState cameraState, PoseStack poseStack, CallbackInfo ci) {
 		if (Fov360Renderer.capturing) {
 			ci.cancel();
 		}

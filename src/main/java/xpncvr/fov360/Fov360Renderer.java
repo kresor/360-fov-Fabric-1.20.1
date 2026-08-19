@@ -1,39 +1,38 @@
 package xpncvr.fov360;
 
+import com.mojang.blaze3d.ProjectionType;
 import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.buffers.Std140Builder;
 import com.mojang.blaze3d.buffers.Std140SizeCalculator;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import com.mojang.blaze3d.platform.Window;
+import com.mojang.blaze3d.shaders.UniformType;
 import com.mojang.blaze3d.systems.CommandEncoder;
 import com.mojang.blaze3d.systems.GpuDevice;
-import com.mojang.blaze3d.systems.ProjectionType;
 import com.mojang.blaze3d.systems.RenderPass;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.textures.FilterMode;
-import net.minecraft.block.enums.CameraSubmersionType;
-import net.minecraft.client.MinecraftClient;
-import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.RenderPipelines;
-import net.minecraft.client.gl.SimpleFramebuffer;
-import net.minecraft.client.gl.UniformType;
-import net.minecraft.client.render.Camera;
-import net.minecraft.client.render.CameraOverride;
-import net.minecraft.client.render.GameRenderer;
-import net.minecraft.client.render.RenderTickCounter;
-import net.minecraft.client.util.Window;
-import net.minecraft.client.util.math.MatrixStack;
-import net.minecraft.entity.Entity;
-import net.minecraft.entity.LivingEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.util.Identifier;
-import net.minecraft.util.math.MathHelper;
+import com.mojang.blaze3d.vertex.PoseStack;
+import net.minecraft.client.Camera;
+import net.minecraft.client.DeltaTracker;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.Projection;
+import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.state.level.CameraRenderState;
+import net.minecraft.resources.Identifier;
+import net.minecraft.util.Mth;
+import net.minecraft.world.entity.Entity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.level.material.FogType;
 import org.joml.Matrix4f;
 import org.joml.Quaternionf;
 import org.joml.Vector3f;
-import xpncvr.fov360.mixin.CameraAccessor;
 import xpncvr.fov360.mixin.GameRendererInvoker;
-import xpncvr.fov360.mixin.WorldRendererAccessor;
+import xpncvr.fov360.mixin.LevelRendererAccessor;
 
 import java.util.OptionalDouble;
 import java.util.OptionalInt;
@@ -47,23 +46,23 @@ public final class Fov360Renderer {
 
 	private static final int MASK_GRID = 32;
 
-	public static volatile Framebuffer currentTarget = null;
+	public static volatile RenderTarget currentTarget = null;
 	public static volatile boolean capturing = false;
 	public static volatile boolean captureOutlines = false;
 	public static volatile float captureViewYaw = 0.0F;
 	public static volatile float captureFaceYaw = 0.0F;
 	public static volatile float captureFacePitch = 0.0F;
 	public static final Vector3f captureViewForward = new Vector3f(0.0F, 0.0F, -1.0F);
-	public static volatile CameraSubmersionType capturedSubmersionType = CameraSubmersionType.NONE;
+	public static volatile FogType capturedFogType = FogType.NONE;
 
 
 	private Fov360Config config = null;
 
-	private final Framebuffer[] faces = new Framebuffer[6];
+	private final RenderTarget[] faces = new RenderTarget[6];
 	private final int[] faceSizes = new int[6];
 	private final boolean[] faceEnabled = new boolean[6];
 
-	private final Framebuffer[] outlineFaces = new Framebuffer[6];
+	private final RenderTarget[] outlineFaces = new RenderTarget[6];
 	private final int[] outlineFaceSizes = new int[6];
 
 	private final Fov360GuiProjection guiProjection = new Fov360GuiProjection();
@@ -74,8 +73,8 @@ public final class Fov360Renderer {
 	private int uboSize = -1;
 	private GpuDevice resourceDevice = null;
 
-	private Framebuffer savedOutlineFb = null;
-	private WorldRendererAccessor outlineRedirect = null;
+	private RenderTarget savedOutlineTarget = null;
+	private LevelRendererAccessor outlineRedirect = null;
 
 	private final Matrix4f[] coordFrames = new Matrix4f[6];
 	private final Vector3f[] faceForward = new Vector3f[6];
@@ -104,14 +103,14 @@ public final class Fov360Renderer {
 		return config;
 	}
 
-	public boolean shouldRun(MinecraftClient client) {
-		return client.world != null && client.player != null;
+	public boolean shouldRun(Minecraft client) {
+		return client.level != null && client.player != null;
 	}
 
 	public static boolean splitGuiActive() {
-		MinecraftClient client = MinecraftClient.getInstance();
+		Minecraft client = Minecraft.getInstance();
 		return client != null
-			&& client.world != null
+			&& client.level != null
 			&& INSTANCE.shouldRun(client)
 			&& INSTANCE.config().splitScreen;
 	}
@@ -153,18 +152,18 @@ public final class Fov360Renderer {
 
 	private static final Quaternionf billboardScratch = new Quaternionf();
 
-	public static Quaternionf billboardOrientation(MatrixStack matrices, Quaternionf faceOrientation, boolean yawOnly) {
+	public static Quaternionf billboardOrientation(PoseStack poseStack, Quaternionf faceOrientation, boolean yawOnly) {
 		if (!capturing) {
 			return faceOrientation;
 		}
-		Matrix4f m = matrices.peek().getPositionMatrix();
+		Matrix4f m = poseStack.last().pose();
 		billboardRotation(billboardScratch, m.m30(), m.m31(), m.m32(), yawOnly);
 		return billboardScratch;
 	}
 
-	public boolean runFrame(GameRenderer gameRenderer, RenderTickCounter tickCounter) {
-		MinecraftClient client = MinecraftClient.getInstance();
-		PlayerEntity player = client.player;
+	public boolean runFrame(GameRenderer gameRenderer, DeltaTracker deltaTracker) {
+		Minecraft client = Minecraft.getInstance();
+		Player player = client.player;
 		if (player == null) {
 			return false;
 		}
@@ -180,21 +179,24 @@ public final class Fov360Renderer {
 				return false;
 			}
 
-			Framebuffer main = client.getFramebuffer();
-			int outH = main.textureHeight;
-			float projW = main.textureWidth / (split ? 2.0F : 1.0F);
+			RenderTarget main = client.getMainRenderTarget();
+			int outH = main.height;
+			float projW = main.width / (split ? 2.0F : 1.0F);
 			float aspect = projW / (float) outH;
 
 			float fovx = split ? rawFov : remapBoundaryFovx(rawFov, aspect);
 
 			computeScales(fovx);
 
-			float tickProgress = tickCounter.getTickProgress(true);
-			Entity cameraEntity = client.getCameraEntity() == null ? player : client.getCameraEntity();
-			float viewYaw = cameraEntity.getYaw(tickProgress);
-			float viewPitch = cameraEntity.getPitch(tickProgress);
+			Camera realCamera = gameRenderer.getMainCamera();
+			float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
+			float cameraPartialTicks = realCamera.getCameraEntityPartialTicks(deltaTracker);
 
-			if (client.options.getPerspective().isFrontView()) {
+			Entity cameraEntity = client.getCameraEntity() == null ? player : client.getCameraEntity();
+			float viewYaw = cameraEntity.getViewYRot(cameraPartialTicks);
+			float viewPitch = cameraEntity.getViewXRot(cameraPartialTicks);
+
+			if (client.options.getCameraType().isMirrored()) {
 				viewYaw += 180.0F;
 				viewPitch = -viewPitch;
 			}
@@ -211,9 +213,7 @@ public final class Fov360Renderer {
 				faceForward[k].set(-coordFrames[k].m02(), -coordFrames[k].m12(), -coordFrames[k].m22());
 			}
 
-			Camera realCamera = gameRenderer.getCamera();
-			((CameraAccessor) realCamera).panini$setRotation(viewYaw, viewPitch);
-			capturedSubmersionType = realCamera.getSubmersionType();
+			capturedFogType = realCamera.getFluidInCamera();
 
 			computeFaceMask(fovx, aspect, split, invert, viewPitch);
 
@@ -224,7 +224,8 @@ public final class Fov360Renderer {
 			int lowSize = config().lowResTopBottomFaces ? halvedSize(fullSize) : fullSize;
 			ensureResources(fullSize, lowSize, centerFace);
 
-			gameRenderer.setCameraOverride(new CameraOverride(new Vector3f(captureViewForward)));
+			GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
+
 			capturing = true;
 			beginOutlineCapture(client);
 
@@ -234,24 +235,28 @@ public final class Fov360Renderer {
 				}
 				captureFaceYaw = faceYaw(viewYaw, k);
 				captureFacePitch = facePitch(k);
-				((CameraAccessor) realCamera).panini$setRotation(captureFaceYaw, captureFacePitch);
 				currentTarget = faces[k];
 				if (outlineRedirect != null) {
-					outlineRedirect.panini$setEntityOutlineFramebuffer(outlineFaces[k]);
+					outlineRedirect.panini$setEntityOutlineTarget(outlineFaces[k]);
 				}
 
-				gameRenderer.renderWorld(tickCounter);
+				realCamera.update(deltaTracker);
+				inv.panini$extractCamera(deltaTracker, worldPartialTicks, cameraPartialTicks);
+				client.levelRenderer.extractLevel(deltaTracker, realCamera, worldPartialTicks);
+				gameRenderer.renderLevel(deltaTracker);
 			}
 
 			currentTarget = null;
 			capturing = false;
-			((CameraAccessor) realCamera).panini$setRotation(viewYaw, viewPitch);
 			endOutlineCapture();
+
+			realCamera.update(deltaTracker);
+			inv.panini$extractCamera(deltaTracker, worldPartialTicks, cameraPartialTicks);
 
 			reproject(client, viewPitch, outH, projW, aspect, split, invert, fovx);
 			reprojectOutline(projW, outH, split, invert, fovx, viewPitch);
 			if (!split) {
-				renderHand(client, gameRenderer, tickProgress);
+				renderHand(client, gameRenderer, cameraPartialTicks);
 			}
 			return true;
 		} catch (Throwable t) {
@@ -260,7 +265,6 @@ public final class Fov360Renderer {
 		} finally {
 			currentTarget = null;
 			capturing = false;
-			gameRenderer.setCameraOverride(null);
 			endOutlineCapture();
 			outlineRedirect = null;
 		}
@@ -451,8 +455,8 @@ public final class Fov360Renderer {
 			density = Math.max(density, projW / (2.0 * Math.tan(rad / 2.0)));
 		}
 		int rounded = (int) (Math.ceil(2.0 * density / 128.0) * 128);
-		int cap = MathHelper.clamp(config().faceSizeCap, 256, 4096);
-		return MathHelper.clamp(rounded, 256, cap);
+		int cap = Mth.clamp(config().faceSizeCap, 256, 4096);
+		return Mth.clamp(rounded, 256, cap);
 	}
 
 	private int halvedSize(int fullSize) {
@@ -482,12 +486,12 @@ public final class Fov360Renderer {
 			}
 			int target = ((k == 4 || k == 5) && k != centerFace) ? lowSize : fullSize;
 			if (faces[k] == null) {
-				faces[k] = new SimpleFramebuffer("fov360_face_" + k, target, target, true);
+				faces[k] = new TextureTarget("fov360_face_" + k, target, target, true);
 			} else if (faceSizes[k] != target) {
 				faces[k].resize(target, target);
 			}
 			if (outlineFaces[k] == null) {
-				outlineFaces[k] = new SimpleFramebuffer("fov360_outline_" + k, target, target, true);
+				outlineFaces[k] = new TextureTarget("fov360_outline_" + k, target, target, true);
 				outlineFaceSizes[k] = target;
 			} else if (outlineFaceSizes[k] != target) {
 				outlineFaces[k].resize(target, target);
@@ -500,10 +504,10 @@ public final class Fov360Renderer {
 		}
 
 		if (pipeline == null) {
-			RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.POST_EFFECT_PROCESSOR_SNIPPET)
-				.withLocation(Identifier.of("fov360", "pipeline/fov360"))
-				.withVertexShader(Identifier.ofVanilla("core/screenquad"))
-				.withFragmentShader(Identifier.of("fov360", "post/fov360"));
+			RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.POST_PROCESSING_SNIPPET)
+				.withLocation(Identifier.fromNamespaceAndPath("fov360", "pipeline/fov360"))
+				.withVertexShader(Identifier.withDefaultNamespace("core/screenquad"))
+				.withFragmentShader(Identifier.fromNamespaceAndPath("fov360", "post/fov360"));
 			for (int i = 0; i < 6; i++) {
 				builder.withSampler("Face" + i + "Sampler");
 			}
@@ -534,9 +538,9 @@ public final class Fov360Renderer {
 		}
 	}
 
-	private void reproject(MinecraftClient client, float viewPitch, int outH, float projW,
+	private void reproject(Minecraft client, float viewPitch, int outH, float projW,
 			float aspect, boolean split, boolean invert, float fovx) {
-		Framebuffer out = client.getFramebuffer();
+		RenderTarget out = client.getMainRenderTarget();
 		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
 		writeUbo(encoder, uboBuffer, fovx, aspect, viewPitch, projW, outH, split, invert, false);
 		runReprojectPass(encoder, "fov360 reproject", uboBuffer, faces, out);
@@ -544,18 +548,18 @@ public final class Fov360Renderer {
 
 	private void reprojectOutline(float projW, int outH, boolean split, boolean invert, float fovx,
 			float viewPitch) {
-		if (outlineRedirect == null || savedOutlineFb == null) {
+		if (outlineRedirect == null || savedOutlineTarget == null) {
 			return;
 		}
 		float aspect = projW / (float) outH;
 		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
 		writeUbo(encoder, uboBufferOutline, fovx, aspect, viewPitch, projW, outH, split, invert, true);
-		runReprojectPass(encoder, "fov360 outline reproject", uboBufferOutline, outlineFaces, savedOutlineFb);
+		runReprojectPass(encoder, "fov360 outline reproject", uboBufferOutline, outlineFaces, savedOutlineTarget);
 	}
 
 	private void writeUbo(CommandEncoder encoder, GpuBuffer ubo, float fovx, float aspect, float viewPitch,
 			float projW, int outH, boolean split, boolean invert, boolean outline) {
-		float aa = MathHelper.clamp(config().antialiasSamples, 1, 4);
+		float aa = Mth.clamp(config().antialiasSamples, 1, 4);
 		try (GpuBuffer.MappedView view = encoder.mapBuffer(ubo, false, true)) {
 			Std140Builder b = Std140Builder.intoBuffer(view.data());
 			for (int i = 0; i < 6; i++) {
@@ -571,71 +575,70 @@ public final class Fov360Renderer {
 	}
 
 	private void runReprojectPass(CommandEncoder encoder, String label, GpuBuffer ubo,
-			Framebuffer[] srcFaces, Framebuffer out) {
+			RenderTarget[] srcFaces, RenderTarget out) {
 		try (RenderPass pass = encoder.createRenderPass(
 				() -> label,
-				out.getColorAttachmentView(), OptionalInt.empty(),
+				out.getColorTextureView(), OptionalInt.empty(),
 				null, OptionalDouble.empty())) {
 			pass.setPipeline(pipeline);
 			RenderSystem.bindDefaultUniforms(pass);
 			pass.setUniform("PaniniConfig", ubo);
 			for (int i = 0; i < 6; i++) {
-				Framebuffer f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
-				pass.bindTexture("Face" + i + "Sampler", f.getColorAttachmentView(), RenderSystem.getSamplerCache().get(FilterMode.NEAREST));
+				RenderTarget f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
+				pass.bindTexture("Face" + i + "Sampler", f.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 			}
 			pass.draw(0, 3);
 		}
 	}
 
-	private void beginOutlineCapture(MinecraftClient client) {
-		WorldRendererAccessor wr = (WorldRendererAccessor) client.worldRenderer;
-		Framebuffer real = wr.panini$getEntityOutlineFramebuffer();
+	private void beginOutlineCapture(Minecraft client) {
+		LevelRendererAccessor lr = (LevelRendererAccessor) client.levelRenderer;
+		RenderTarget real = lr.panini$getEntityOutlineTarget();
 		if (real == null) {
 			outlineRedirect = null;
-			savedOutlineFb = null;
+			savedOutlineTarget = null;
 			captureOutlines = false;
 			return;
 		}
-		outlineRedirect = wr;
-		savedOutlineFb = real;
+		outlineRedirect = lr;
+		savedOutlineTarget = real;
 		captureOutlines = true;
 	}
 
 	private void endOutlineCapture() {
 		captureOutlines = false;
 		if (outlineRedirect != null) {
-			outlineRedirect.panini$setEntityOutlineFramebuffer(savedOutlineFb);
+			outlineRedirect.panini$setEntityOutlineTarget(savedOutlineTarget);
 		}
 	}
 
-	private void renderHand(MinecraftClient client, GameRenderer gameRenderer, float tickProgress) {
-		gameRenderer.setCameraOverride(null);
-
+	private void renderHand(Minecraft client, GameRenderer gameRenderer, float partialTicks) {
 		GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
-		Camera camera = gameRenderer.getCamera();
-		Entity cameraEntity = client.getCameraEntity();
-		boolean sleeping = cameraEntity instanceof LivingEntity living && living.isSleeping();
-
-		Matrix4f positionMatrix = new Matrix4f().rotation(qPlayer.conjugate(qTmp));
-
+		CameraRenderState cameraState = gameRenderer.getGameRenderState().levelRenderState.cameraRenderState;
 		Window window = client.getWindow();
+
+		Projection hudProjection = inv.panini$hudProjection();
+		hudProjection.setupPerspective(
+			Camera.PROJECTION_Z_NEAR,
+			GameRenderer.PROJECTION_3D_HUD_Z_FAR,
+			cameraState.hudFov,
+			window.getWidth(),
+			window.getHeight());
 		RenderSystem.setProjectionMatrix(
-			inv.panini$hudProjectionMatrix().set(
-				window.getFramebufferWidth(), window.getFramebufferHeight(),
-				inv.panini$getFov(camera, tickProgress, false)),
+			inv.panini$hud3dProjectionMatrixBuffer().getBuffer(hudProjection),
 			ProjectionType.PERSPECTIVE);
 		RenderSystem.getDevice().createCommandEncoder()
-			.clearDepthTexture(client.getFramebuffer().getDepthAttachment(), 1.0);
-		inv.panini$renderHand(tickProgress, sleeping, positionMatrix);
+			.clearDepthTexture(client.getMainRenderTarget().getDepthTexture(), 1.0);
+		inv.panini$renderItemInHand(cameraState, partialTicks, cameraState.viewRotationMatrix);
 	}
 
 	private float en(int i) {
 		return faceEnabled[i] ? 1.0F : 0.0F;
 	}
 
-	private float fovx(MinecraftClient client) {
-		int fovOption = client.options.getFov().getValue();
-		return MathHelper.clamp(fovOption, 30.0F, 400.0F);
+	private float fovx(Minecraft client) {
+		int fovOption = client.options.fov().get();
+		return Mth.clamp(fovOption, 30.0F, 400.0F);
 	}
 
 	private float remapBoundaryFovx(float rawFov, float aspect) {

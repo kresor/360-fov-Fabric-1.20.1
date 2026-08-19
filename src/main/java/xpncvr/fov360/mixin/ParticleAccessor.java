@@ -7,14 +7,14 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 @Mixin(Particle.class)
 public interface ParticleAccessor {
 
-	@Accessor("lastX")
-	double panini$getLastX();
+	@Accessor("xo")
+	double panini$getXOld();
 
-	@Accessor("lastY")
-	double panini$getLastY();
+	@Accessor("yo")
+	double panini$getYOld();
 
-	@Accessor("lastZ")
-	double panini$getLastZ();
+	@Accessor("zo")
+	double panini$getZOld();
 
 	@Accessor("x")
 	double panini$getX();

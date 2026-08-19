@@ -1,8 +1,8 @@
 package xpncvr.fov360.mixin;
 
-import net.minecraft.client.render.Frustum;
-import net.minecraft.client.render.entity.EntityRenderer;
-import net.minecraft.util.math.Box;
+import net.minecraft.client.renderer.culling.Frustum;
+import net.minecraft.client.renderer.entity.EntityRenderer;
+import net.minecraft.world.phys.AABB;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Redirect;
@@ -17,10 +17,10 @@ public abstract class EntityRendererMixin {
 		method = "shouldRender",
 		at = @At(
 			value = "INVOKE",
-			target = "Lnet/minecraft/client/render/Frustum;isVisible(Lnet/minecraft/util/math/Box;)Z"))
-	private boolean panini$captureCullMargin(Frustum frustum, Box box) {
+			target = "Lnet/minecraft/client/renderer/culling/Frustum;isVisible(Lnet/minecraft/world/phys/AABB;)Z"))
+	private boolean panini$captureCullMargin(Frustum frustum, AABB box) {
 		if (Fov360Renderer.capturing) {
-			return frustum.isVisible(box.expand(CAPTURE_CULL_MARGIN));
+			return frustum.isVisible(box.inflate(CAPTURE_CULL_MARGIN));
 		}
 		return frustum.isVisible(box);
 	}
