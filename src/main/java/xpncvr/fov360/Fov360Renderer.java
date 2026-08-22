@@ -5,6 +5,8 @@ import com.mojang.blaze3d.buffers.GpuBuffer;
 import com.mojang.blaze3d.buffers.GpuBufferSlice;
 import com.mojang.blaze3d.buffers.Std140Builder;
 import com.mojang.blaze3d.buffers.Std140SizeCalculator;
+import com.mojang.blaze3d.GpuFormat;
+import com.mojang.blaze3d.pipeline.BindGroupLayout;
 import com.mojang.blaze3d.pipeline.RenderPipeline;
 import com.mojang.blaze3d.pipeline.RenderTarget;
 import com.mojang.blaze3d.pipeline.TextureTarget;
@@ -22,6 +24,8 @@ import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.Projection;
 import net.minecraft.client.renderer.RenderPipelines;
+import net.minecraft.client.renderer.SubmitNodeStorage;
+import net.minecraft.client.renderer.state.GameRenderState;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.resources.Identifier;
 import net.minecraft.util.Mth;
@@ -34,8 +38,8 @@ import org.joml.Vector3f;
 import xpncvr.fov360.mixin.GameRendererInvoker;
 import xpncvr.fov360.mixin.LevelRendererAccessor;
 
+import java.util.Optional;
 import java.util.OptionalDouble;
-import java.util.OptionalInt;
 
 public final class Fov360Renderer {
 	public static final Fov360Renderer INSTANCE = new Fov360Renderer();
@@ -105,6 +109,13 @@ public final class Fov360Renderer {
 
 	public boolean shouldRun(Minecraft client) {
 		return client.level != null && client.player != null;
+	}
+
+	public static boolean willCapture(Minecraft client) {
+		if (client == null || client.player == null || !INSTANCE.shouldRun(client)) {
+			return false;
+		}
+		return INSTANCE.config().splitScreen || INSTANCE.fovx(client) >= CUBE_MIN_FOV;
 	}
 
 	public static boolean splitGuiActive() {
@@ -179,7 +190,7 @@ public final class Fov360Renderer {
 				return false;
 			}
 
-			RenderTarget main = client.getMainRenderTarget();
+			RenderTarget main = gameRenderer.mainRenderTarget();
 			int outH = main.height;
 			float projW = main.width / (split ? 2.0F : 1.0F);
 			float aspect = projW / (float) outH;
@@ -188,7 +199,7 @@ public final class Fov360Renderer {
 
 			computeScales(fovx);
 
-			Camera realCamera = gameRenderer.getMainCamera();
+			Camera realCamera = gameRenderer.mainCamera();
 			float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
 			float cameraPartialTicks = realCamera.getCameraEntityPartialTicks(deltaTracker);
 
@@ -242,7 +253,7 @@ public final class Fov360Renderer {
 
 				realCamera.update(deltaTracker);
 				inv.panini$extractCamera(deltaTracker, worldPartialTicks, cameraPartialTicks);
-				client.levelRenderer.extractLevel(deltaTracker, realCamera, worldPartialTicks);
+				client.levelExtractor.extract(deltaTracker, realCamera, worldPartialTicks);
 				gameRenderer.renderLevel(deltaTracker);
 			}
 
@@ -256,7 +267,7 @@ public final class Fov360Renderer {
 			reproject(client, viewPitch, outH, projW, aspect, split, invert, fovx);
 			reprojectOutline(projW, outH, split, invert, fovx, viewPitch);
 			if (!split) {
-				renderHand(client, gameRenderer, cameraPartialTicks);
+				renderHand(client, gameRenderer, cameraPartialTicks, worldPartialTicks);
 			}
 			return true;
 		} catch (Throwable t) {
@@ -486,12 +497,12 @@ public final class Fov360Renderer {
 			}
 			int target = ((k == 4 || k == 5) && k != centerFace) ? lowSize : fullSize;
 			if (faces[k] == null) {
-				faces[k] = new TextureTarget("fov360_face_" + k, target, target, true);
+				faces[k] = new TextureTarget("fov360_face_" + k, target, target, true, GpuFormat.RGBA8_UNORM);
 			} else if (faceSizes[k] != target) {
 				faces[k].resize(target, target);
 			}
 			if (outlineFaces[k] == null) {
-				outlineFaces[k] = new TextureTarget("fov360_outline_" + k, target, target, true);
+				outlineFaces[k] = new TextureTarget("fov360_outline_" + k, target, target, true, GpuFormat.RGBA8_UNORM);
 				outlineFaceSizes[k] = target;
 			} else if (outlineFaceSizes[k] != target) {
 				outlineFaces[k].resize(target, target);
@@ -508,10 +519,12 @@ public final class Fov360Renderer {
 				.withLocation(Identifier.fromNamespaceAndPath("fov360", "pipeline/fov360"))
 				.withVertexShader(Identifier.withDefaultNamespace("core/screenquad"))
 				.withFragmentShader(Identifier.fromNamespaceAndPath("fov360", "post/fov360"));
+			BindGroupLayout.Builder bindGroup = BindGroupLayout.builder();
 			for (int i = 0; i < 6; i++) {
-				builder.withSampler("Face" + i + "Sampler");
+				bindGroup.withSampler("Face" + i + "Sampler");
 			}
-			builder.withUniform("PaniniConfig", UniformType.UNIFORM_BUFFER);
+			bindGroup.withUniform("PaniniConfig", UniformType.UNIFORM_BUFFER);
+			builder.withBindGroupLayout(bindGroup.build());
 			pipeline = builder.build();
 		}
 
@@ -540,7 +553,7 @@ public final class Fov360Renderer {
 
 	private void reproject(Minecraft client, float viewPitch, int outH, float projW,
 			float aspect, boolean split, boolean invert, float fovx) {
-		RenderTarget out = client.getMainRenderTarget();
+		RenderTarget out = client.gameRenderer.mainRenderTarget();
 		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
 		writeUbo(encoder, uboBuffer, fovx, aspect, viewPitch, projW, outH, split, invert, false);
 		runReprojectPass(encoder, "fov360 reproject", uboBuffer, faces, out);
@@ -560,7 +573,7 @@ public final class Fov360Renderer {
 	private void writeUbo(CommandEncoder encoder, GpuBuffer ubo, float fovx, float aspect, float viewPitch,
 			float projW, int outH, boolean split, boolean invert, boolean outline) {
 		float aa = Mth.clamp(config().antialiasSamples, 1, 4);
-		try (GpuBuffer.MappedView view = encoder.mapBuffer(ubo, false, true)) {
+		try (GpuBufferSlice.MappedView view = ubo.map(false, true)) {
 			Std140Builder b = Std140Builder.intoBuffer(view.data());
 			for (int i = 0; i < 6; i++) {
 				b.putMat4f(coordFrames[i]);
@@ -578,7 +591,7 @@ public final class Fov360Renderer {
 			RenderTarget[] srcFaces, RenderTarget out) {
 		try (RenderPass pass = encoder.createRenderPass(
 				() -> label,
-				out.getColorTextureView(), OptionalInt.empty(),
+				out.getColorTextureView(), Optional.empty(),
 				null, OptionalDouble.empty())) {
 			pass.setPipeline(pipeline);
 			RenderSystem.bindDefaultUniforms(pass);
@@ -587,7 +600,7 @@ public final class Fov360Renderer {
 				RenderTarget f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
 				pass.bindTexture("Face" + i + "Sampler", f.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
 			}
-			pass.draw(0, 3);
+			pass.draw(3, 1, 0, 0);
 		}
 	}
 
@@ -612,9 +625,10 @@ public final class Fov360Renderer {
 		}
 	}
 
-	private void renderHand(Minecraft client, GameRenderer gameRenderer, float partialTicks) {
+	private void renderHand(Minecraft client, GameRenderer gameRenderer, float partialTicks, float worldPartialTicks) {
 		GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
-		CameraRenderState cameraState = gameRenderer.getGameRenderState().levelRenderState.cameraRenderState;
+		GameRenderState renderState = gameRenderer.gameRenderState();
+		CameraRenderState cameraState = renderState.levelRenderState.cameraRenderState;
 		Window window = client.getWindow();
 
 		Projection hudProjection = inv.panini$hudProjection();
@@ -628,8 +642,17 @@ public final class Fov360Renderer {
 			inv.panini$hud3dProjectionMatrixBuffer().getBuffer(hudProjection),
 			ProjectionType.PERSPECTIVE);
 		RenderSystem.getDevice().createCommandEncoder()
-			.clearDepthTexture(client.getMainRenderTarget().getDepthTexture(), 1.0);
+			.clearDepthTexture(gameRenderer.mainRenderTarget().getDepthTexture(), 0.0);
 		inv.panini$renderItemInHand(cameraState, partialTicks, cameraState.viewRotationMatrix);
+
+		SubmitNodeStorage handAndScreen = inv.panini$handAndScreenSubmitNodeStorage();
+		inv.panini$screenEffectRenderer().submit(
+			renderState.optionsRenderState.cameraType.isFirstPerson(),
+			cameraState.entityRenderState.isSleeping,
+			worldPartialTicks,
+			handAndScreen,
+			renderState.guiRenderState.isHudHidden);
+		gameRenderer.featureRenderDispatcher().renderAllFeatures(handAndScreen);
 	}
 
 	private float en(int i) {

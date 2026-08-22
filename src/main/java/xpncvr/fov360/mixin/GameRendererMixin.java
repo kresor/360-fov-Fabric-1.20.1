@@ -20,7 +20,7 @@ public abstract class GameRendererMixin {
 			return;
 		}
 		Minecraft client = Minecraft.getInstance();
-		if (!Fov360Renderer.INSTANCE.shouldRun(client)) {
+		if (!Fov360Renderer.willCapture(client)) {
 			return;
 		}
 		if (Fov360Renderer.INSTANCE.runFrame((GameRenderer) (Object) this, deltaTracker)) {

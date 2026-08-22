@@ -57,7 +57,7 @@ public abstract class CameraMixin {
 			1.0F,
 			Camera.PROJECTION_Z_NEAR,
 			this.depthFar,
-			RenderSystem.getDevice().isZZeroToOne());
+			RenderSystem.getDevice().getDeviceInfo().isZZeroToOne());
 		Frustum frustum = new Frustum(viewRotation, cullProjection);
 		Vec3 pos = self.position();
 		frustum.prepare(pos.x(), pos.y(), pos.z());
@@ -83,7 +83,7 @@ public abstract class CameraMixin {
 			(float) client.getWindow().getWidth() / client.getWindow().getHeight(),
 			Camera.PROJECTION_Z_NEAR,
 			this.depthFar,
-			RenderSystem.getDevice().isZZeroToOne()));
+			RenderSystem.getDevice().getDeviceInfo().isZZeroToOne()));
 	}
 
 	@Inject(method = "getFluidInCamera", at = @At("HEAD"), cancellable = true)

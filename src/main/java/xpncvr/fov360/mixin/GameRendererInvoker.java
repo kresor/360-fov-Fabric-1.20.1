@@ -4,6 +4,8 @@ import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.GameRenderer;
 import net.minecraft.client.renderer.Projection;
 import net.minecraft.client.renderer.ProjectionMatrixBuffer;
+import net.minecraft.client.renderer.ScreenEffectRenderer;
+import net.minecraft.client.renderer.SubmitNodeStorage;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.joml.Matrix4fc;
 import org.spongepowered.asm.mixin.Mixin;
@@ -24,4 +26,10 @@ public interface GameRendererInvoker {
 
 	@Accessor("hud3dProjectionMatrixBuffer")
 	ProjectionMatrixBuffer panini$hud3dProjectionMatrixBuffer();
+
+	@Accessor("screenEffectRenderer")
+	ScreenEffectRenderer panini$screenEffectRenderer();
+
+	@Accessor("handAndScreenSubmitNodeStorage")
+	SubmitNodeStorage panini$handAndScreenSubmitNodeStorage();
 }
