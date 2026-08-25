@@ -23,6 +23,7 @@
 		"ParticleAccessor",
 		"ScreenEffectRendererMixin",
 		"SingleQuadParticleMixin",
+		"SkyRendererMixin",
 		"ThrownItemRendererMixin",
 		"WindowMixin"
 	],

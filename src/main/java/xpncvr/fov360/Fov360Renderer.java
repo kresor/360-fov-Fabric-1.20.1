@@ -130,6 +130,16 @@ public final class Fov360Renderer {
 		return splitGuiActive() && INSTANCE.config().invertSplitScreen;
 	}
 
+	public static RenderTarget skyTarget(RenderTarget cached) {
+		RenderTarget target = currentTarget;
+		if (target != null) {
+			return target;
+		}
+		Minecraft client = Minecraft.getInstance();
+		GameRenderer gameRenderer = client == null ? null : client.gameRenderer;
+		return gameRenderer == null ? cached : gameRenderer.mainRenderTarget();
+	}
+
 	public static GpuBufferSlice rightHalfGuiProjection(Window window) {
 		try {
 			return INSTANCE.guiProjection.slice(window);
