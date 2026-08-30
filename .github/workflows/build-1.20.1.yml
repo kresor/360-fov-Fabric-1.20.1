@@ -1,0 +1,43 @@
+name: Build Fabric 1.20.1 port
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "1.20.1-port", "main" ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Make Gradle wrapper executable
+        run: chmod +x gradlew
+
+      - name: Build
+        run: ./gradlew build --stacktrace
+
+      - name: Upload jars
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fov360-1.20.1-port-build
+          path: build/libs/*.jar
+          if-no-files-found: ignore
+
+      - name: Upload build reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fov360-1.20.1-build-reports
+          path: |
+            build/reports/**
+            build/tmp/**
+          if-no-files-found: ignore
