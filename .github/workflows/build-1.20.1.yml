@@ -3,41 +3,49 @@ name: Build Fabric 1.20.1 port
 on:
   workflow_dispatch:
   push:
-    branches: [ "1.20.1-port", "main" ]
+    branches:
+      - main
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v5
 
-      - uses: actions/setup-java@v4
+      - name: Set up Java 17
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
           cache: gradle
 
-      - name: Make Gradle wrapper executable
+      - name: Make Gradle executable
         run: chmod +x gradlew
 
-      - name: Build
-        run: ./gradlew build --stacktrace
+      - name: Build and capture full log
+        id: gradle-build
+        shell: bash
+        run: |
+          set +e
+          ./gradlew build --stacktrace --console=plain 2>&1 | tee fov360-build.log
+          RESULT=${PIPESTATUS[0]}
+          echo "gradle_exit_code=$RESULT" >> "$GITHUB_OUTPUT"
+          exit $RESULT
 
-      - name: Upload jars
+      - name: Upload complete build log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: fov360-1.20.1-port-build
-          path: build/libs/*.jar
-          if-no-files-found: ignore
+          name: fov360-1.20.1-build-log
+          path: fov360-build.log
+          if-no-files-found: error
 
-      - name: Upload build reports
-        if: failure()
+      - name: Upload jar if build succeeds
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: fov360-1.20.1-build-reports
-          path: |
-            build/reports/**
-            build/tmp/**
-          if-no-files-found: ignore
+          name: fov360-1.20.1-test-jar
+          path: build/libs/*.jar
+          if-no-files-found: error
