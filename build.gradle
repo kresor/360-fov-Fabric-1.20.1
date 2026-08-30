@@ -20,6 +20,22 @@ dependencies {
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_api_version}"
 }
 
+
+// The GitHub fork still contains the upstream 26.x Java sources. GitHub's web
+// uploader replaces files but does not delete old ones, so compile only the
+// four files that belong to this 1.20.1 rewrite. This makes the port build
+// deterministic even while the legacy files remain in the repository.
+sourceSets {
+    main {
+        java {
+            include "xpncvr/fov360/Main.java"
+            include "xpncvr/fov360/Fov360Config.java"
+            include "xpncvr/fov360/Fov360Renderer.java"
+            include "xpncvr/fov360/mixin/GameRendererMixin.java"
+        }
+    }
+}
+
 processResources {
     inputs.property "version", project.version
     filesMatching("fabric.mod.json") {

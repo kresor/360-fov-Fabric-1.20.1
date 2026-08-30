@@ -24,3 +24,7 @@ Instead it recreates the older Flex-FOV style architecture on the 1.20.1 rendere
 ## Why Yarn mappings now
 
 The older 1.20.1 renderer APIs and the Flex-FOV-era code are much easier to target with Yarn named mappings than by trying to translate modern Mojang-named 26.x rendering classes.
+
+
+## Attempt 6
+GitHub web upload did not delete legacy 26.x Java source files, so Attempt 5 still compiled them. Attempt 6 constrains the Gradle main Java source set to the four 1.20.1 rewrite files only. This is a repository hygiene/build-selection fix; the renderer code is unchanged from Attempt 5 so the next CI run should expose the first real compile errors in the native 1.20.1 rewrite.
