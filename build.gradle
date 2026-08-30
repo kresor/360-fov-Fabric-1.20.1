@@ -32,6 +32,7 @@ sourceSets {
             include "xpncvr/fov360/Fov360Config.java"
             include "xpncvr/fov360/Fov360Renderer.java"
             include "xpncvr/fov360/mixin/GameRendererMixin.java"
+            include "xpncvr/fov360/mixin/GameOptionsMixin.java"
         }
     }
 }

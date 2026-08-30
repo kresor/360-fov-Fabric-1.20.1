@@ -4,7 +4,8 @@
   "package": "xpncvr.fov360.mixin",
   "compatibilityLevel": "JAVA_17",
   "client": [
-    "GameRendererMixin"
+    "GameRendererMixin",
+    "GameOptionsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

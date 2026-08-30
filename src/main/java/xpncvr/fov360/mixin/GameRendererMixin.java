@@ -30,9 +30,7 @@ public abstract class GameRendererMixin {
     private void fov360$redirectWorldRender(GameRenderer gameRenderer, float tickDelta, long limitTime, MatrixStack matrices) {
         boolean oldRenderHand = this.renderHand;
         try {
-            // Avoid drawing the first-person hand five extra times into side faces.
-            gameRenderer.setRenderHand(false);
-            Fov360Renderer.INSTANCE.renderFrame(gameRenderer, tickDelta, limitTime, matrices);
+            Fov360Renderer.INSTANCE.renderFrame(gameRenderer, tickDelta, limitTime, matrices, oldRenderHand);
         } finally {
             gameRenderer.setRenderHand(oldRenderHand);
         }

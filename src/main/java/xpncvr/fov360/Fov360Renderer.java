@@ -51,7 +51,7 @@ public final class Fov360Renderer {
         return !failed && client != null && client.world != null && client.player != null && client.getCameraEntity() != null;
     }
 
-    public void renderFrame(GameRenderer gameRenderer, float tickDelta, long limitTime, MatrixStack matrices) {
+    public void renderFrame(GameRenderer gameRenderer, float tickDelta, long limitTime, MatrixStack matrices, boolean renderHand) {
         MinecraftClient client = MinecraftClient.getInstance();
         if (!shouldRun(client)) {
             gameRenderer.renderWorld(tickDelta, limitTime, matrices);
@@ -79,31 +79,40 @@ public final class Fov360Renderer {
 
             CAPTURING = true;
 
-            // Extra cube faces. The caller mixin has temporarily disabled the hand.
+            // Side/back/up/down cube captures must never contain the player's
+            // first-person hand. Only the front capture gets it.
+            gameRenderer.setRenderHand(false);
             for (int face = 1; face < 6; face++) {
                 setFace(cameraEntity, viewYaw, face);
                 gameRenderer.renderWorld(tickDelta, limitTime, new MatrixStack());
                 copyFace(framebuffer, face);
             }
 
-            // Front face. The world is deliberately captured at horizon pitch;
-            // output pitch is applied by the reprojection shader.
+            // Front face. Restore the caller's hand-rendering state so the
+            // held item/hand is captured once rather than six times. This is a
+            // pragmatic 1.20.1 implementation; a later pass can render the hand
+            // after reprojection if a mod exposes edge cases here.
+            gameRenderer.setRenderHand(renderHand);
             setFace(cameraEntity, viewYaw, 0);
             gameRenderer.renderWorld(tickDelta, limitTime, matrices);
             copyFace(framebuffer, 0);
 
             // Restore player/camera entity before any GUI/input code continues.
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
+            gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
 
             float aspect = framebuffer.textureWidth / (float) framebuffer.textureHeight;
-            float rawFov = Fov360Config.INSTANCE.getFov();
+            // Attempt 7 uses Minecraft's normal FOV slider. GameOptionsMixin
+            // raises its maximum to 400, matching modern 360 FOV behavior.
+            float rawFov = Math.max(30.0F, Math.min(400.0F, client.options.getFov().get()));
             float projectedFov = remapBoundaryFovx(rawFov, aspect);
             reproject(framebuffer, projectedFov, aspect, viewPitch);
         } catch (Throwable t) {
             failed = true;
             Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
+            gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
         }
     }
