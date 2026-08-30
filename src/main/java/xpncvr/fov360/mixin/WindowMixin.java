@@ -11,17 +11,17 @@ import xpncvr.fov360.Fov360Renderer;
 public abstract class WindowMixin {
     @Inject(method = "getFramebufferWidth", at = @At("HEAD"), cancellable = true)
     private void fov360$captureWidth(CallbackInfoReturnable<Integer> cir) {
-        int captureSize = Fov360Renderer.getActiveCaptureSize();
-        if (Fov360Renderer.CAPTURING && captureSize > 0) {
-            cir.setReturnValue(captureSize);
+        int size = Fov360Renderer.getActiveCaptureSize();
+        if (size > 0) {
+            cir.setReturnValue(size);
         }
     }
 
     @Inject(method = "getFramebufferHeight", at = @At("HEAD"), cancellable = true)
     private void fov360$captureHeight(CallbackInfoReturnable<Integer> cir) {
-        int captureSize = Fov360Renderer.getActiveCaptureSize();
-        if (Fov360Renderer.CAPTURING && captureSize > 0) {
-            cir.setReturnValue(captureSize);
+        int size = Fov360Renderer.getActiveCaptureSize();
+        if (size > 0) {
+            cir.setReturnValue(size);
         }
     }
 }

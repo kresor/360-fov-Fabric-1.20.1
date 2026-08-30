@@ -31,17 +31,18 @@ public final class Fov360Config {
                 captureScale = clamp(Float.parseFloat(properties.getProperty("captureScale", Float.toString(DEFAULT_CAPTURE_SCALE))), 0.25F, 1.0F);
                 skipBackFace = Boolean.parseBoolean(properties.getProperty("skipBackFace", Boolean.toString(DEFAULT_SKIP_BACK_FACE)));
             } catch (Exception e) {
-                Main.LOGGER.warn("Could not read {}, using default 360-FOV performance settings", path, e);
+                Main.LOGGER.warn("Could not read {}, using performance defaults", path, e);
                 captureScale = DEFAULT_CAPTURE_SCALE;
                 skipBackFace = DEFAULT_SKIP_BACK_FACE;
             }
         }
 
-        properties.setProperty("note", "Set your normal Minecraft FOV slider to 120 for the tested 5120x1440 baseline. These values control capture performance.");
         properties.setProperty("captureScale", Float.toString(captureScale));
         properties.setProperty("skipBackFace", Boolean.toString(skipBackFace));
-        properties.setProperty("captureScale.comment", "0.75 is the default balanced mode. Lower is faster, higher is sharper.");
-        properties.setProperty("skipBackFace.comment", "true skips the rear cube face when projected FOV stays below the threshold.");
+        properties.setProperty("note", "Minecraft FOV slider controls projected FOV. 120 is the tested 5120x1440 baseline.");
+        properties.setProperty("captureScale.comment", "0.75 balanced; 0.5 faster/softer; 1.0 sharpest/slowest.");
+        properties.setProperty("skipBackFace.comment", "Skips rear cube render when projected FOV is safely below 180 degrees.");
+
         try {
             Files.createDirectories(path.getParent());
             try (OutputStream out = Files.newOutputStream(path)) {

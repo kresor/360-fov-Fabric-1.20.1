@@ -2,6 +2,7 @@ package xpncvr.fov360;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
+import net.minecraft.client.gl.SimpleFramebuffer;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
@@ -15,27 +16,25 @@ import org.lwjgl.opengl.GL30;
 
 import java.nio.ByteBuffer;
 import java.nio.FloatBuffer;
-import java.nio.IntBuffer;
 
 /**
- * 1.20.1 renderer based on older Flex-FOV architecture.
+ * Deliberately small 1.20.1 renderer based on the older Flex-FOV architecture:
+ * render six 90 degree cube faces, copy the centre square of the vanilla
+ * framebuffer, then reproject those faces with the 360-FOV projection curve.
  *
- * Attempt 9 performance pass:
- * - capture into a centred square viewport rather than the full-width 32:9 viewport
- * - expose captureScale in config (default 0.75)
- * - optionally skip the back cube face for sub-~165 projected FOV
- * - temporarily spoof framebuffer width/height during capture through WindowMixin
+ * This first rewrite is intentionally first-person focused. It omits the modern
+ * 26.x render-state/entity-billboard patches until the core projection is proven.
  */
 public final class Fov360Renderer {
     public static final Fov360Renderer INSTANCE = new Fov360Renderer();
 
     public static volatile boolean CAPTURING = false;
+    private static volatile Framebuffer CAPTURE_TARGET = null;
     private static volatile int ACTIVE_CAPTURE_SIZE = -1;
 
     private final int[] faceTextures = new int[6];
+    private SimpleFramebuffer captureFramebuffer;
     private int faceSize = -1;
-    private int captureX;
-    private int captureY;
 
     private int program;
     private int vao;
@@ -52,8 +51,12 @@ public final class Fov360Renderer {
     private Fov360Renderer() {
     }
 
+    public static Framebuffer getCaptureTargetOverride() {
+        return CAPTURING ? CAPTURE_TARGET : null;
+    }
+
     public static int getActiveCaptureSize() {
-        return ACTIVE_CAPTURE_SIZE;
+        return CAPTURING ? ACTIVE_CAPTURE_SIZE : -1;
     }
 
     public boolean shouldRun(MinecraftClient client) {
@@ -73,6 +76,9 @@ public final class Fov360Renderer {
             return;
         }
 
+        // Resolve the real window framebuffer before CAPTURING is enabled.
+        Framebuffer outputFramebuffer = client.getFramebuffer();
+
         float savedYaw = cameraEntity.getYaw();
         float savedPitch = cameraEntity.getPitch();
         float savedPrevYaw = cameraEntity.prevYaw;
@@ -82,67 +88,61 @@ public final class Fov360Renderer {
         float viewPitch = lerp(tickDelta, savedPrevPitch, savedPitch);
 
         try {
-            Framebuffer framebuffer = client.getFramebuffer();
+            float aspect = outputFramebuffer.textureWidth / (float) outputFramebuffer.textureHeight;
             float rawFov = Math.max(30.0F, Math.min(400.0F, client.options.getFov().getValue()));
-            float fullAspect = framebuffer.textureWidth / (float) framebuffer.textureHeight;
-            float projectedFov = remapBoundaryFovx(rawFov, fullAspect);
+            float projectedFov = remapBoundaryFovx(rawFov, aspect);
 
-            int baseSize = Math.max(64, Math.min(framebuffer.textureWidth, framebuffer.textureHeight));
+            int baseSize = Math.max(64, Math.min(outputFramebuffer.textureWidth, outputFramebuffer.textureHeight));
             int size = Math.max(256, Math.min(baseSize, Math.round(baseSize * Fov360Config.INSTANCE.getCaptureScale())));
             ensureGl(size);
+            ensureCaptureFramebuffer(size);
 
             boolean renderBackFace = !Fov360Config.INSTANCE.isSkipBackFace() || projectedFov >= 165.0F;
 
-            IntBuffer viewport = BufferUtils.createIntBuffer(16);
-            GL11.glGetIntegerv(GL11.GL_VIEWPORT, viewport);
-            int oldViewportX = viewport.get(0);
-            int oldViewportY = viewport.get(1);
-            int oldViewportW = viewport.get(2);
-            int oldViewportH = viewport.get(3);
-
-            captureX = Math.max(0, (framebuffer.textureWidth - faceSize) / 2);
-            captureY = Math.max(0, (framebuffer.textureHeight - faceSize) / 2);
-
+            CAPTURE_TARGET = captureFramebuffer;
+            ACTIVE_CAPTURE_SIZE = size;
             CAPTURING = true;
-            ACTIVE_CAPTURE_SIZE = faceSize;
 
-            framebuffer.beginWrite(true);
-            GL11.glViewport(captureX, captureY, faceSize, faceSize);
-
-            // Side/back/up/down cube captures must never contain the player's
-            // first-person hand. Only the front capture gets it.
             gameRenderer.setRenderHand(false);
             for (int face = 1; face < 6; face++) {
                 if (face == 2 && !renderBackFace) {
                     continue;
                 }
-                setFace(cameraEntity, viewYaw, face);
-                gameRenderer.renderWorld(tickDelta, limitTime, new MatrixStack());
-                copyFace(framebuffer, face);
+                renderCaptureFace(gameRenderer, cameraEntity, viewYaw, tickDelta, limitTime, face, false, new MatrixStack());
             }
 
-            // Front face: capture the held item/hand once.
             gameRenderer.setRenderHand(renderHand);
-            setFace(cameraEntity, viewYaw, 0);
-            gameRenderer.renderWorld(tickDelta, limitTime, matrices);
-            copyFace(framebuffer, 0);
+            renderCaptureFace(gameRenderer, cameraEntity, viewYaw, tickDelta, limitTime, 0, renderHand, matrices);
 
-            // Restore state before GUI/input code continues.
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
             gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
+            CAPTURE_TARGET = null;
             ACTIVE_CAPTURE_SIZE = -1;
-            GL11.glViewport(oldViewportX, oldViewportY, oldViewportW, oldViewportH);
 
-            reproject(framebuffer, projectedFov, fullAspect, viewPitch);
+            outputFramebuffer.beginWrite(true);
+            reproject(outputFramebuffer, projectedFov, aspect, viewPitch);
         } catch (Throwable t) {
             failed = true;
             Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
             gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
+            CAPTURE_TARGET = null;
             ACTIVE_CAPTURE_SIZE = -1;
+            outputFramebuffer.beginWrite(true);
         }
+    }
+
+    private void renderCaptureFace(GameRenderer gameRenderer, Entity cameraEntity, float viewYaw,
+                                   float tickDelta, long limitTime, int face, boolean renderHand, MatrixStack matrices) {
+        captureFramebuffer.beginWrite(true);
+        captureFramebuffer.clear(MinecraftClient.IS_SYSTEM_MAC);
+        captureFramebuffer.beginWrite(true);
+        gameRenderer.setRenderHand(renderHand);
+        setFace(cameraEntity, viewYaw, face);
+        gameRenderer.renderWorld(tickDelta, limitTime, matrices);
+        copyFace(face);
     }
 
     private void setFace(Entity entity, float baseYaw, int face) {
@@ -169,6 +169,17 @@ public final class Fov360Renderer {
         entity.prevPitch = prevPitch;
     }
 
+    private void ensureCaptureFramebuffer(int requestedSize) {
+        if (captureFramebuffer == null) {
+            captureFramebuffer = new SimpleFramebuffer(requestedSize, requestedSize, true, MinecraftClient.IS_SYSTEM_MAC);
+            captureFramebuffer.setClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+            return;
+        }
+        if (captureFramebuffer.textureWidth != requestedSize || captureFramebuffer.textureHeight != requestedSize) {
+            captureFramebuffer.resize(requestedSize, requestedSize, MinecraftClient.IS_SYSTEM_MAC);
+        }
+    }
+
     private void ensureGl(int requestedFaceSize) {
         if (!glReady) {
             initProgramAndQuad();
@@ -193,17 +204,16 @@ public final class Fov360Renderer {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
-    private void copyFace(Framebuffer framebuffer, int face) {
-        framebuffer.beginWrite(false);
+    private void copyFace(int face) {
+        captureFramebuffer.beginWrite(false);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, faceTextures[face]);
-        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, captureX, captureY, faceSize, faceSize);
+        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, faceSize, faceSize);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
     private void reproject(Framebuffer framebuffer, float fovx, float aspect, float pitchDegrees) {
         framebuffer.beginWrite(true);
-        GL11.glViewport(0, 0, framebuffer.textureWidth, framebuffer.textureHeight);
 
         boolean depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
         boolean blend = GL11.glIsEnabled(GL11.GL_BLEND);
@@ -453,6 +463,8 @@ public final class Fov360Renderer {
                 ray = equirectRay(c);
             }
 
+            // Cube captures are horizon-aligned. Apply Minecraft pitch here:
+            // positive pitch looks down.
             float p = radians(pitchDegrees);
             float cp = cos(p);
             float sp = sin(p);
