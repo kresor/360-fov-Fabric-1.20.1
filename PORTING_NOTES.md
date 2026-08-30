@@ -20,3 +20,14 @@ Use the GitHub Action `Build Fabric 1.20.1 port` to get the first compiler/mixin
 - Switched Fabric Loader/API dependencies to `modImplementation`.
 - Updated GitHub Actions Java setup to v5.
 - Expected next failure: Java compile errors caused by renderer/API differences between Minecraft 26.2 and 1.20.1. Those errors are the useful input for the real renderer backport.
+
+
+## Attempt 3 build-system fixes
+
+- Use legacy Gradle plugin id `fabric-loom` for Loom 1.7.4. The newer `net.fabricmc.fabric-loom` id belongs to the newer Loom plugin-id scheme and does not resolve correctly for this older Loom generation.
+- Loom updated to 1.7.4, which is aligned with Gradle 8.8.
+- Fabric API updated from 0.92.2+1.20.1 to 0.92.11+1.20.1. This also avoids the August 2026 `fabric-api-deprecated` 0.92.2 cache/jar issue reported by Fabric users.
+- Fabric Loader updated to 0.16.10.
+- CI uses `--refresh-dependencies` to avoid restoring a broken/stale dependency from Gradle cache.
+
+Expected next failure: Java compile errors caused by Minecraft 26.2 rendering APIs that do not exist in 1.20.1. That is progress: it means the build toolchain is finally configured and the renderer backport can begin.
