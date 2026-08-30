@@ -10,6 +10,7 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 import xpncvr.fov360.Fov360Renderer;
+import xpncvr.fov360.Fov360Config;
 
 @Mixin(GameRenderer.class)
 public abstract class GameRendererMixin {
@@ -40,8 +41,19 @@ public abstract class GameRendererMixin {
     @Inject(method = "getFov", at = @At("HEAD"), cancellable = true)
     private void fov360$captureFov(Camera camera, float tickDelta, boolean changingFov,
                                    CallbackInfoReturnable<Double> cir) {
-        if (Fov360Renderer.CAPTURING && changingFov) {
-            cir.setReturnValue(90.0D);
+        if (Fov360Renderer.CAPTURING) {
+            if (changingFov) {
+                // World cube faces stay true 90 degree captures.
+                cir.setReturnValue(90.0D);
+            } else {
+                // The first-person hand is rendered inside the front cube face.
+                // On 32:9 the vanilla hand projection is much wider than the
+                // square face we copy, which is why Attempt 12 clipped it. A
+                // wider hand-only FOV shrinks/recenters the hand so the entire
+                // item remains inside the copied square while preserving the
+                // proven Attempt 12 world renderer.
+                cir.setReturnValue((double) Fov360Config.INSTANCE.getHandCaptureFov());
+            }
         }
     }
 }

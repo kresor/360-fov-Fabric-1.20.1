@@ -1,14 +1,21 @@
-# Attempt 15 - restore vanilla hand projection
+# Attempt 16 - preserve Attempt 12, fix hand inside front face
 
-Attempt 14 proved that drawing the hand as a final overlay is the correct architectural direction, but the hand was rendered using a stale cubemap/world projection matrix. The result was a giant black hand/item covering much of the screen.
+Attempts 14/15 tried rendering the hand after panoramic reprojection. On 1.20.1 that produces a gigantic black hand/item because the vanilla first-person pass depends on renderWorld's internal projection/model-view state.
 
-Attempt 15 keeps the Attempt 12 panoramic world renderer and face-culling optimization unchanged, but before invoking Minecraft 1.20.1's private `renderHand(...)` method it now:
+Attempt 16 abandons that path completely and returns to the known-good Attempt 12 architecture:
 
-1. obtains Minecraft's own hand FOV using `getFov(camera, tickDelta, false)`;
-2. backs up the current RenderSystem projection matrix;
-3. loads `getBasicProjectionMatrix(handFov)`;
-4. clears only the depth buffer so the hand can render over the reprojected world;
-5. renders the hand once;
-6. restores the previous projection matrix.
+- full-quality Attempt 8/12 cubemap capture
+- dynamic face culling from Attempt 12
+- hand rendered only in the front cubemap face
 
-This should preserve the clean panoramic world while making the hand/item use normal vanilla first-person perspective.
+The only new change is a separate **hand-only capture FOV**. On a 32:9 framebuffer the vanilla hand is positioned for the full 5120-wide projection, but only the center 1440x1440 square is copied into the cubemap face. That clips the hand. Rendering the hand with a wider FOV shrinks/recenters it enough to remain inside that square.
+
+Default:
+
+`handCaptureFov=150.0`
+
+Config file:
+
+`config/fov360-1.20.1.properties`
+
+If the hand is still clipped, try 160 or 170. If it looks too small, try 140.

@@ -5,8 +5,7 @@
   "compatibilityLevel": "JAVA_17",
   "client": [
     "GameRendererMixin",
-    "GameOptionsMixin",
-    "HandRendererInvoker"
+    "GameOptionsMixin"
   ],
   "injectors": {
     "defaultRequire": 1

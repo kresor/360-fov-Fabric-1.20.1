@@ -1,10 +1,8 @@
 package xpncvr.fov360;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.render.GameRenderer;
-import xpncvr.fov360.mixin.HandRendererInvoker;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import org.lwjgl.BufferUtils;
@@ -98,41 +96,21 @@ public final class Fov360Renderer {
                 copyFace(framebuffer, face);
             }
 
-            // Front face is world-only as well. Rendering the first-person
-            // hand inside the 90 degree front cubemap face clips it at that
-            // face boundary on 32:9. We composite the hand once, after the
-            // world has been reprojected to the final screen.
-            gameRenderer.setRenderHand(false);
+            // Front face. Restore the caller's hand-rendering state so the
+            // held item/hand is captured once rather than six times. This is a
+            // pragmatic 1.20.1 implementation; a later pass can render the hand
+            // after reprojection if a mod exposes edge cases here.
+            gameRenderer.setRenderHand(renderHand);
             setFace(cameraEntity, viewYaw, 0);
             gameRenderer.renderWorld(tickDelta, limitTime, matrices);
             copyFace(framebuffer, 0);
 
-            // Restore player/camera entity before final reprojection/overlay.
+            // Restore player/camera entity before any GUI/input code continues.
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
+            gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
 
             reproject(framebuffer, projectedFov, aspect, viewPitch);
-
-            // Render the hand once after panoramic reprojection, but restore
-            // the *vanilla hand projection* first. renderHand() itself assumes
-            // renderWorld() has already installed this matrix. Calling it
-            // directly with the stale cubemap/world projection makes the hand
-            // explode across the screen (Attempt 14).
-            gameRenderer.setRenderHand(renderHand);
-            if (renderHand) {
-                HandRendererInvoker invoker = (HandRendererInvoker) gameRenderer;
-                double handFov = invoker.fov360$getFov(gameRenderer.getCamera(), tickDelta, false);
-
-                RenderSystem.backupProjectionMatrix();
-                try {
-                    gameRenderer.loadProjectionMatrix(gameRenderer.getBasicProjectionMatrix(handFov));
-                    framebuffer.beginWrite(false);
-                    GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
-                    invoker.fov360$renderHand(new MatrixStack(), gameRenderer.getCamera(), tickDelta);
-                } finally {
-                    RenderSystem.restoreProjectionMatrix();
-                }
-            }
         } catch (Throwable t) {
             failed = true;
             Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);

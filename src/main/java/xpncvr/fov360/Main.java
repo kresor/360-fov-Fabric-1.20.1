@@ -10,7 +10,7 @@ public final class Main implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         Fov360Config.INSTANCE.load();
-        LOGGER.info("360 FOV 1.20.1 experimental backport initialized (target FOV {} degrees)",
-            Fov360Config.INSTANCE.getFov());
+        LOGGER.info("360 FOV 1.20.1 experimental backport initialized (handCaptureFov={})",
+            Fov360Config.INSTANCE.getHandCaptureFov());
     }
 }
