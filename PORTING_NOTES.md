@@ -1,28 +1,28 @@
-# 360 FOV Fabric 1.20.1 backport - Attempt 7
+# Attempt 9 - first performance pass
 
-Attempt 7 builds on the first confirmed in-game working 1.20.1 renderer (Attempt 6).
+This attempt keeps the working 1.20.1 backport and adds three performance-oriented changes:
 
-Changes:
+1. **Reduced capture resolution**
+   - Each cube face is now rendered into a centered square viewport sized from `captureScale`.
+   - Default is `captureScale=0.75`, so a 5120x1440 setup captures faces at ~1080x1080 instead of using the full-width 5120x1440 viewport.
 
-- Extends the normal Minecraft FOV slider from 30..110 to 30..400 via `GameOptionsMixin`.
-- The renderer now reads the live vanilla FOV option instead of the temporary properties-file FOV.
-- First-person hand/held item is disabled on the five auxiliary cube faces and enabled once on the front cube face.
-- The old `fov360-1.20.1.properties` file is no longer authoritative for FOV. It can remain on disk harmlessly.
+2. **Square capture projection during cube-face rendering**
+   - `WindowMixin` temporarily reports square framebuffer dimensions during cube capture so Minecraft's projection matrix matches the square viewport.
 
-Expected test:
+3. **Optional back-face skipping**
+   - `skipBackFace=true` by default.
+   - The rear cube face is skipped when the projected FOV remains below the threshold (currently 165 degrees), which should include the user's tested 120 FOV ultrawide case.
 
-1. Install the Attempt 7 jar over Attempt 6 in a clean Fabric 1.20.1 instance.
-2. Open Options. The FOV slider should continue past `Quake Pro` and reach 400.
-3. Set FOV to 120 and enter a world at 5120x1440.
-4. Confirm the projection still looks like Attempt 6 and that the player's hand/held item renders once.
+## Config
 
-Known limitation:
+File: `config/fov360-1.20.1.properties`
 
-The hand is presently captured in the front cube face and therefore passes through the reprojection shader with the world. At the user's tested 120-degree ultrawide setting this should be visually reasonable, but it is not yet the ideal separate post-reprojection hand pass used by newer renderer architectures.
+Relevant properties:
+- `captureScale=0.75`
+- `skipBackFace=true`
 
-
-## Attempt 8
-
-- Fixed the Minecraft 1.20.1/Yarn `SimpleOption` accessor used by the live FOV slider.
-- In 1.20.1 the API is `SimpleOption#getValue()`, not the later/other-mapping `get()` accessor.
-- No renderer behavior changed in this pass; this is the single compile blocker reported by Attempt 7.
+Suggested tests:
+- Keep normal Minecraft FOV slider at **120**
+- Test AOF7 / giant pack with default config
+- If image quality remains good, try `captureScale=0.5` for more speed
+- If artifacts appear near extreme edges, set `skipBackFace=false`

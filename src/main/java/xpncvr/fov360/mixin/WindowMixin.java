@@ -9,15 +9,19 @@ import xpncvr.fov360.Fov360Renderer;
 
 @Mixin(Window.class)
 public abstract class WindowMixin {
+    @Inject(method = "getFramebufferWidth", at = @At("HEAD"), cancellable = true)
+    private void fov360$captureWidth(CallbackInfoReturnable<Integer> cir) {
+        int captureSize = Fov360Renderer.getActiveCaptureSize();
+        if (Fov360Renderer.CAPTURING && captureSize > 0) {
+            cir.setReturnValue(captureSize);
+        }
+    }
 
-	@Inject(method = "getGuiScaledWidth", at = @At("HEAD"), cancellable = true)
-	private void panini$halfScaledWidth(CallbackInfoReturnable<Integer> cir) {
-		if (Fov360Renderer.splitGuiActive()) {
-			Window self = (Window) (Object) this;
-			double d = self.getGuiScale();
-			double halfWidth = self.getWidth() / 2.0;
-			int i = (int) (halfWidth / d);
-			cir.setReturnValue(halfWidth / d > i ? i + 1 : i);
-		}
-	}
+    @Inject(method = "getFramebufferHeight", at = @At("HEAD"), cancellable = true)
+    private void fov360$captureHeight(CallbackInfoReturnable<Integer> cir) {
+        int captureSize = Fov360Renderer.getActiveCaptureSize();
+        if (Fov360Renderer.CAPTURING && captureSize > 0) {
+            cir.setReturnValue(captureSize);
+        }
+    }
 }
