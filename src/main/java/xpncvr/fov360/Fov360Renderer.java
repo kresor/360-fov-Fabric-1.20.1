@@ -105,7 +105,7 @@ public final class Fov360Renderer {
             float aspect = framebuffer.textureWidth / (float) framebuffer.textureHeight;
             // Attempt 7 uses Minecraft's normal FOV slider. GameOptionsMixin
             // raises its maximum to 400, matching modern 360 FOV behavior.
-            float rawFov = Math.max(30.0F, Math.min(400.0F, client.options.getFov().get()));
+            float rawFov = Math.max(30.0F, Math.min(400.0F, client.options.getFov().getValue()));
             float projectedFov = remapBoundaryFovx(rawFov, aspect);
             reproject(framebuffer, projectedFov, aspect, viewPitch);
         } catch (Throwable t) {

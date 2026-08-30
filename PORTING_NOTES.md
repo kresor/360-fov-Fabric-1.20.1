@@ -19,3 +19,10 @@ Expected test:
 Known limitation:
 
 The hand is presently captured in the front cube face and therefore passes through the reprojection shader with the world. At the user's tested 120-degree ultrawide setting this should be visually reasonable, but it is not yet the ideal separate post-reprojection hand pass used by newer renderer architectures.
+
+
+## Attempt 8
+
+- Fixed the Minecraft 1.20.1/Yarn `SimpleOption` accessor used by the live FOV slider.
+- In 1.20.1 the API is `SimpleOption#getValue()`, not the later/other-mapping `get()` accessor.
+- No renderer behavior changed in this pass; this is the single compile blocker reported by Attempt 7.
