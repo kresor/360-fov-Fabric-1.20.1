@@ -1,11 +1,14 @@
-# Attempt 14 - avoid stale upstream invoker collision
+# Attempt 15 - restore vanilla hand projection
 
-Attempt 13's build log showed GitHub was still compiling the original 26.x `GameRendererInvoker.java`, which contains modern renderer APIs unavailable in 1.20.1.
+Attempt 14 proved that drawing the hand as a final overlay is the correct architectural direction, but the hand was rendered using a stale cubemap/world projection matrix. The result was a giant black hand/item covering much of the screen.
 
-This pass renames the new 1.20.1 invoker to **HandRendererInvoker.java** and updates all references. The stale upstream file can remain in the repository because `build.gradle` no longer includes it.
+Attempt 15 keeps the Attempt 12 panoramic world renderer and face-culling optimization unchanged, but before invoking Minecraft 1.20.1's private `renderHand(...)` method it now:
 
-Behavior goal remains unchanged from Attempt 13:
-- keep Attempt 12's quality-preserving face culling
-- render cubemap faces without the first-person hand
-- reproject the world
-- render the hand/item once afterward as a normal screen-space overlay
+1. obtains Minecraft's own hand FOV using `getFov(camera, tickDelta, false)`;
+2. backs up the current RenderSystem projection matrix;
+3. loads `getBasicProjectionMatrix(handFov)`;
+4. clears only the depth buffer so the hand can render over the reprojected world;
+5. renders the hand once;
+6. restores the previous projection matrix.
+
+This should preserve the clean panoramic world while making the hand/item use normal vanilla first-person perspective.

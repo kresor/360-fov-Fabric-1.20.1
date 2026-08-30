@@ -1,5 +1,13 @@
-# 360 FOV Fabric 1.20.1 - Attempt 14
+# 360 FOV Fabric 1.20.1 - Attempt 15
 
-Build-fix pass for the first-person hand overlay introduced in Attempt 13.
+Quality-preserving 1.20.1 ultrawide projection backport.
 
-The only substantive change is using a uniquely named 1.20.1 mixin invoker (`HandRendererInvoker`) so the fork's stale upstream 26.x `GameRendererInvoker.java` cannot be compiled by mistake.
+Attempt 15 fixes the oversized/black first-person hand introduced by Attempt 14 by restoring Minecraft's normal hand projection matrix for the final hand overlay.
+
+Recommended test:
+- 5120x1440
+- FOV 120
+- All of Fabric 7
+- shaders off initially
+- compare world quality/performance to Attempt 12
+- test empty hand, tool, block, and map

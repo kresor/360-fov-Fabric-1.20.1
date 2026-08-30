@@ -1,5 +1,6 @@
 package xpncvr.fov360;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.render.GameRenderer;
@@ -112,13 +113,25 @@ public final class Fov360Renderer {
 
             reproject(framebuffer, projectedFov, aspect, viewPitch);
 
-            // Render the hand/held item once in normal screen space after the
-            // panoramic world pass. This keeps the hand sharp and prevents it
-            // from being chopped by cubemap face edges. Vanilla renderHand
-            // also owns the normal first-person transforms for maps/items.
+            // Render the hand once after panoramic reprojection, but restore
+            // the *vanilla hand projection* first. renderHand() itself assumes
+            // renderWorld() has already installed this matrix. Calling it
+            // directly with the stale cubemap/world projection makes the hand
+            // explode across the screen (Attempt 14).
             gameRenderer.setRenderHand(renderHand);
             if (renderHand) {
-                ((HandRendererInvoker) gameRenderer).fov360$renderHand(new MatrixStack(), gameRenderer.getCamera(), tickDelta);
+                HandRendererInvoker invoker = (HandRendererInvoker) gameRenderer;
+                double handFov = invoker.fov360$getFov(gameRenderer.getCamera(), tickDelta, false);
+
+                RenderSystem.backupProjectionMatrix();
+                try {
+                    gameRenderer.loadProjectionMatrix(gameRenderer.getBasicProjectionMatrix(handFov));
+                    framebuffer.beginWrite(false);
+                    GL11.glClear(GL11.GL_DEPTH_BUFFER_BIT);
+                    invoker.fov360$renderHand(new MatrixStack(), gameRenderer.getCamera(), tickDelta);
+                } finally {
+                    RenderSystem.restoreProjectionMatrix();
+                }
             }
         } catch (Throwable t) {
             failed = true;
