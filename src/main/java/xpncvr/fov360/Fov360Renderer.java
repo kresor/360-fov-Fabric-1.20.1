@@ -1,691 +1,484 @@
 package xpncvr.fov360;
 
-import com.mojang.blaze3d.ProjectionType;
-import com.mojang.blaze3d.buffers.GpuBuffer;
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.buffers.Std140Builder;
-import com.mojang.blaze3d.buffers.Std140SizeCalculator;
-import com.mojang.blaze3d.GpuFormat;
-import com.mojang.blaze3d.pipeline.BindGroupLayout;
-import com.mojang.blaze3d.pipeline.RenderPipeline;
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.pipeline.TextureTarget;
-import com.mojang.blaze3d.platform.Window;
-import com.mojang.blaze3d.shaders.UniformType;
-import com.mojang.blaze3d.systems.CommandEncoder;
-import com.mojang.blaze3d.systems.GpuDevice;
-import com.mojang.blaze3d.systems.RenderPass;
-import com.mojang.blaze3d.systems.RenderSystem;
-import com.mojang.blaze3d.textures.FilterMode;
-import com.mojang.blaze3d.vertex.PoseStack;
-import net.minecraft.client.Camera;
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.Minecraft;
-import net.minecraft.client.renderer.GameRenderer;
-import net.minecraft.client.renderer.Projection;
-import net.minecraft.client.renderer.RenderPipelines;
-import net.minecraft.client.renderer.SubmitNodeStorage;
-import net.minecraft.client.renderer.state.GameRenderState;
-import net.minecraft.client.renderer.state.level.CameraRenderState;
-import net.minecraft.resources.Identifier;
-import net.minecraft.util.Mth;
-import net.minecraft.world.entity.Entity;
-import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.level.material.FogType;
-import org.joml.Matrix4f;
-import org.joml.Quaternionf;
-import org.joml.Vector3f;
-import xpncvr.fov360.mixin.GameRendererInvoker;
-import xpncvr.fov360.mixin.LevelRendererAccessor;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.client.gl.Framebuffer;
+import net.minecraft.client.render.GameRenderer;
+import net.minecraft.client.util.math.MatrixStack;
+import net.minecraft.entity.Entity;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL12;
+import org.lwjgl.opengl.GL13;
+import org.lwjgl.opengl.GL15;
+import org.lwjgl.opengl.GL20;
+import org.lwjgl.opengl.GL30;
 
-import java.util.Optional;
-import java.util.OptionalDouble;
+import java.nio.ByteBuffer;
+import java.nio.FloatBuffer;
 
+/**
+ * Deliberately small 1.20.1 renderer based on the older Flex-FOV architecture:
+ * render six 90 degree cube faces, copy the centre square of the vanilla
+ * framebuffer, then reproject those faces with the 360-FOV projection curve.
+ *
+ * This first rewrite is intentionally first-person focused. It omits the modern
+ * 26.x render-state/entity-billboard patches until the core projection is proven.
+ */
 public final class Fov360Renderer {
-	public static final Fov360Renderer INSTANCE = new Fov360Renderer();
-
-	private static final double DEG2RAD = Math.PI / 180.0;
-
-	private static final float CUBE_MIN_FOV = 90.0F;
-
-	private static final int MASK_GRID = 32;
-
-	public static volatile RenderTarget currentTarget = null;
-	public static volatile boolean capturing = false;
-	public static volatile boolean captureOutlines = false;
-	public static volatile float captureViewYaw = 0.0F;
-	public static volatile float captureFaceYaw = 0.0F;
-	public static volatile float captureFacePitch = 0.0F;
-	public static final Vector3f captureViewForward = new Vector3f(0.0F, 0.0F, -1.0F);
-	public static volatile FogType capturedFogType = FogType.NONE;
-
-
-	private Fov360Config config = null;
-
-	private final RenderTarget[] faces = new RenderTarget[6];
-	private final int[] faceSizes = new int[6];
-	private final boolean[] faceEnabled = new boolean[6];
-
-	private final RenderTarget[] outlineFaces = new RenderTarget[6];
-	private final int[] outlineFaceSizes = new int[6];
-
-	private final Fov360GuiProjection guiProjection = new Fov360GuiProjection();
-
-	private RenderPipeline pipeline = null;
-	private GpuBuffer uboBuffer = null;
-	private GpuBuffer uboBufferOutline = null;
-	private int uboSize = -1;
-	private GpuDevice resourceDevice = null;
-
-	private RenderTarget savedOutlineTarget = null;
-	private LevelRendererAccessor outlineRedirect = null;
-
-	private final Matrix4f[] coordFrames = new Matrix4f[6];
-	private final Vector3f[] faceForward = new Vector3f[6];
-	private final Quaternionf qFace = new Quaternionf();
-	private final Quaternionf qPlayer = new Quaternionf();
-	private final Quaternionf qTmp = new Quaternionf();
-	private final Vector3f rayOut = new Vector3f();
-	private final Vector3f rayA = new Vector3f();
-	private final Vector3f rayB = new Vector3f();
-	private final Vector3f hybA = new Vector3f();
-	private final Vector3f hybB = new Vector3f();
-
-	private float scaleStd, scalePan, scaleSte, scaleMer, scaleEqu, scaleFish;
-
-	private Fov360Renderer() {
-		for (int i = 0; i < 6; i++) {
-			coordFrames[i] = new Matrix4f();
-			faceForward[i] = new Vector3f();
-		}
-	}
-
-	private Fov360Config config() {
-		if (config == null) {
-			config = Fov360Config.load();
-		}
-		return config;
-	}
-
-	public boolean shouldRun(Minecraft client) {
-		return client.level != null && client.player != null;
-	}
-
-	public static boolean willCapture(Minecraft client) {
-		if (client == null || client.player == null || !INSTANCE.shouldRun(client)) {
-			return false;
-		}
-		return INSTANCE.config().splitScreen || INSTANCE.fovx(client) >= CUBE_MIN_FOV;
-	}
-
-	public static boolean splitGuiActive() {
-		Minecraft client = Minecraft.getInstance();
-		return client != null
-			&& client.level != null
-			&& INSTANCE.shouldRun(client)
-			&& INSTANCE.config().splitScreen;
-	}
-
-	public static boolean splitGuiOnRight() {
-		return splitGuiActive() && INSTANCE.config().invertSplitScreen;
-	}
-
-	public static RenderTarget skyTarget(RenderTarget cached) {
-		RenderTarget target = currentTarget;
-		if (target != null) {
-			return target;
-		}
-		Minecraft client = Minecraft.getInstance();
-		GameRenderer gameRenderer = client == null ? null : client.gameRenderer;
-		return gameRenderer == null ? cached : gameRenderer.mainRenderTarget();
-	}
-
-	public static GpuBufferSlice rightHalfGuiProjection(Window window) {
-		try {
-			return INSTANCE.guiProjection.slice(window);
-		} catch (Throwable t) {
-			INSTANCE.fail(t);
-			return null;
-		}
-	}
-
-	private Quaternionf q(Quaternionf dest, float yaw, float pitch) {
-		return dest.rotationYXZ(
-			(float) Math.PI - yaw * (float) DEG2RAD,
-			-pitch * (float) DEG2RAD,
-			0.0F);
-	}
-
-	public static void billboardRotation(Quaternionf dest, double dx, double dy, double dz, boolean yawOnly) {
-		double h2 = dx * dx + dz * dz;
-		double dist = Math.sqrt(h2 + dy * dy);
-		float lookYaw;
-		float lookPitch;
-		if (h2 < 1.0e-8) {
-			lookYaw = captureViewYaw;
-			lookPitch = yawOnly ? 0.0F : (dy > 0.0 ? -90.0F : 90.0F);
-		} else {
-			lookYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-			lookPitch = (dist < 1.0e-8 || yawOnly) ? 0.0F : (float) -Math.toDegrees(Math.asin(dy / dist));
-		}
-		INSTANCE.q(dest, lookYaw, lookPitch);
-	}
-
-	private static final Quaternionf billboardScratch = new Quaternionf();
-
-	public static Quaternionf billboardOrientation(PoseStack poseStack, Quaternionf faceOrientation, boolean yawOnly) {
-		if (!capturing) {
-			return faceOrientation;
-		}
-		Matrix4f m = poseStack.last().pose();
-		billboardRotation(billboardScratch, m.m30(), m.m31(), m.m32(), yawOnly);
-		return billboardScratch;
-	}
-
-	public boolean runFrame(GameRenderer gameRenderer, DeltaTracker deltaTracker) {
-		Minecraft client = Minecraft.getInstance();
-		Player player = client.player;
-		if (player == null) {
-			return false;
-		}
-
-		outlineRedirect = null;
-
-		try {
-			float rawFov = fovx(client);
-			boolean split = config().splitScreen;
-			boolean invert = config().invertSplitScreen;
-
-			if (!split && rawFov < CUBE_MIN_FOV) {
-				return false;
-			}
-
-			RenderTarget main = gameRenderer.mainRenderTarget();
-			int outH = main.height;
-			float projW = main.width / (split ? 2.0F : 1.0F);
-			float aspect = projW / (float) outH;
-
-			float fovx = split ? rawFov : remapBoundaryFovx(rawFov, aspect);
-
-			computeScales(fovx);
-
-			Camera realCamera = gameRenderer.mainCamera();
-			float worldPartialTicks = deltaTracker.getGameTimeDeltaPartialTick(false);
-			float cameraPartialTicks = realCamera.getCameraEntityPartialTicks(deltaTracker);
-
-			Entity cameraEntity = client.getCameraEntity() == null ? player : client.getCameraEntity();
-			float viewYaw = cameraEntity.getViewYRot(cameraPartialTicks);
-			float viewPitch = cameraEntity.getViewXRot(cameraPartialTicks);
-
-			if (client.options.getCameraType().isMirrored()) {
-				viewYaw += 180.0F;
-				viewPitch = -viewPitch;
-			}
-
-			q(qPlayer, viewYaw, viewPitch);
-			captureViewYaw = viewYaw;
-			captureViewForward.set(0.0F, 0.0F, -1.0F).rotate(qPlayer);
-
-			for (int k = 0; k < 6; k++) {
-				float faceYaw = faceYaw(viewYaw, k);
-				float facePitch = facePitch(k);
-				q(qFace, faceYaw, facePitch).conjugate(qTmp).mul(qPlayer);
-				coordFrames[k].rotation(qTmp);
-				faceForward[k].set(-coordFrames[k].m02(), -coordFrames[k].m12(), -coordFrames[k].m22());
-			}
-
-			capturedFogType = realCamera.getFluidInCamera();
-
-			computeFaceMask(fovx, aspect, split, invert, viewPitch);
-
-			screenToRay(0.0F, 0.0F, fovx, viewPitch, false);
-			int centerFace = faceIndexOf(rayOut);
-
-			int fullSize = requiredFaceSize(projW, fovx);
-			int lowSize = config().lowResTopBottomFaces ? halvedSize(fullSize) : fullSize;
-			ensureResources(fullSize, lowSize, centerFace);
-
-			GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
-
-			capturing = true;
-			beginOutlineCapture(client);
-
-			for (int k = 0; k < 6; k++) {
-				if (!faceEnabled[k]) {
-					continue;
-				}
-				captureFaceYaw = faceYaw(viewYaw, k);
-				captureFacePitch = facePitch(k);
-				currentTarget = faces[k];
-				if (outlineRedirect != null) {
-					outlineRedirect.panini$setEntityOutlineTarget(outlineFaces[k]);
-				}
-
-				realCamera.update(deltaTracker);
-				inv.panini$extractCamera(deltaTracker, worldPartialTicks, cameraPartialTicks);
-				client.levelExtractor.extract(deltaTracker, realCamera, worldPartialTicks);
-				gameRenderer.renderLevel(deltaTracker);
-			}
-
-			currentTarget = null;
-			capturing = false;
-			endOutlineCapture();
-
-			realCamera.update(deltaTracker);
-			inv.panini$extractCamera(deltaTracker, worldPartialTicks, cameraPartialTicks);
-
-			reproject(client, viewPitch, outH, projW, aspect, split, invert, fovx);
-			reprojectOutline(projW, outH, split, invert, fovx, viewPitch);
-			if (!split) {
-				renderHand(client, gameRenderer, cameraPartialTicks, worldPartialTicks);
-			}
-			return true;
-		} catch (Throwable t) {
-			fail(t);
-			return false;
-		} finally {
-			currentTarget = null;
-			capturing = false;
-			endOutlineCapture();
-			outlineRedirect = null;
-		}
-	}
-
-	private static float faceYaw(float viewYaw, int k) {
-		switch (k) {
-			case 1: return viewYaw + 90.0F;
-			case 2: return viewYaw + 180.0F;
-			case 3: return viewYaw - 90.0F;
-			default: return viewYaw;
-		}
-	}
-
-	private static float facePitch(int k) {
-		switch (k) {
-			case 4: return -90.0F;
-			case 5: return 90.0F;
-			default: return 0.0F;
-		}
-	}
-
-	private void computeScales(float fovx) {
-		double rHalf = fovx * DEG2RAD / 2.0;
-		scaleStd = (float) Math.tan(rHalf);
-		scalePan = (float) ((2.0 / (1.0 + Math.cos(rHalf))) * Math.sin(rHalf));
-		scaleSte = (float) Math.tan(rHalf / 2.0);
-		scaleMer = (float) rHalf;
-		scaleEqu = (float) rHalf;
-		scaleFish = (float) rHalf;
-	}
-
-	private void computeFaceMask(float fovx, float aspect, boolean split, boolean invert, float pitchDeg) {
-		for (int i = 0; i < 6; i++) {
-			faceEnabled[i] = false;
-		}
-		for (int iy = 0; iy <= MASK_GRID; iy++) {
-			float ty = iy / (float) MASK_GRID;
-			for (int ix = 0; ix <= MASK_GRID; ix++) {
-				float tx = ix / (float) MASK_GRID;
-				boolean rear = false;
-				float ux = tx;
-				if (split) {
-					rear = (tx >= 0.5F) != invert;
-					ux = (tx * 2.0F) % 1.0F;
-				}
-				float sx = (ux - 0.5F) * 2.0F;
-				float sy = (ty - 0.5F) * (2.0F / aspect);
-				if (Math.abs(sx) > 1.0F) {
-					continue;
-				}
-				if (!screenToRay(sx, sy, fovx, pitchDeg, rear)) {
-					continue;
-				}
-				faceEnabled[faceIndexOf(rayOut)] = true;
-			}
-		}
-		faceEnabled[0] = true;
-	}
-
-	private int faceIndexOf(Vector3f ray) {
-		int index = 0;
-		float best = -2.0F;
-		for (int k = 0; k < 6; k++) {
-			float d = ray.dot(faceForward[k]);
-			if (d > best) {
-				best = d;
-				index = k;
-			}
-		}
-		return index;
-	}
-
-	private void latlonToRay(Vector3f d, double lat, double lon) {
-		double cl = Math.cos(lat);
-		d.set((float) (Math.sin(lon) * cl), (float) Math.sin(lat), (float) (Math.cos(lon) * cl));
-	}
-
-	private void standardRay(Vector3f d, float cx, float cy) {
-		double x = cx * scaleStd, y = cy * scaleStd;
-		double r = Math.sqrt(x * x + y * y);
-		if (r < 1.0e-9) {
-			d.set(0.0F, 0.0F, 1.0F);
-			return;
-		}
-		double th = Math.atan(r), s = Math.sin(th);
-		d.set((float) (x / r * s), (float) (y / r * s), (float) Math.cos(th));
-	}
-
-	private void paniniRay(Vector3f d, float cx, float cy) {
-		double x = cx * scalePan, y = cy * scalePan;
-		double k = x * x / 4.0;
-		double dscr = k * k - (k + 1.0) * (k - 1.0);
-		double clon = (-k + Math.sqrt(dscr)) / (k + 1.0);
-		double S = 2.0 / (1.0 + clon);
-		latlonToRay(d, Math.atan2(y, S), Math.atan2(x, S * clon));
-	}
-
-	private void stereoRay(Vector3f d, float cx, float cy) {
-		double x = cx * scaleSte, y = cy * scaleSte;
-		double r = Math.sqrt(x * x + y * y);
-		if (r < 1.0e-9) {
-			d.set(0.0F, 0.0F, 1.0F);
-			return;
-		}
-		double th = Math.atan(r) / 0.5, s = Math.sin(th);
-		d.set((float) (x / r * s), (float) (y / r * s), (float) Math.cos(th));
-	}
-
-	private void fisheyeRay(Vector3f d, float cx, float cy) {
-		double x = cx * scaleFish, y = cy * scaleFish;
-		double r = Math.sqrt(x * x + y * y);
-		if (r < 1.0e-9) {
-			d.set(0.0F, 0.0F, 1.0F);
-			return;
-		}
-		double th = r, s = Math.sin(th);
-		d.set((float) (x / r * s), (float) (y / r * s), (float) Math.cos(th));
-	}
-
-	private void mercatorRay(Vector3f d, float cx, float cy) {
-		double x = cx * scaleMer, y = cy * scaleMer;
-		latlonToRay(d, Math.atan(Math.sinh(y)), x);
-	}
-
-	private boolean equirectRay(Vector3f d, float cx, float cy) {
-		double x = cx * scaleEqu, y = cy * scaleEqu;
-		if (Math.abs(y) > Math.PI / 2.0) {
-			d.set(0.0F, 0.0F, 0.0F);
-			return false;
-		}
-		latlonToRay(d, y, x);
-		return true;
-	}
-
-	private void hybridRay(Vector3f d, float cx, float cy, float pitchDeg) {
-		paniniRay(hybA, cx, cy);
-		stereoRay(hybB, cx, cy);
-		d.set(hybA).lerp(hybB, Math.abs(pitchDeg) / 90.0F);
-	}
-
-	private boolean screenToRay(float cx, float cy, float fovx, float pitchDeg, boolean rear) {
-		if (fovx < 90.0F) {
-			standardRay(rayOut, cx, cy);
-		} else if (fovx < 160.0F) {
-			double lin = (fovx - 90.0) / 70.0;
-			float p = (float) (1.0 - (lin - 1.0) * (lin - 1.0));
-			standardRay(rayA, cx, cy);
-			hybridRay(rayB, cx, cy, pitchDeg);
-			rayOut.set(rayA).lerp(rayB, p);
-		} else if (fovx < 220.0F) {
-			double lin = (fovx - 160.0) / 60.0;
-			float p = (float) (1.0 - (lin - 1.0) * (lin - 1.0));
-			hybridRay(rayA, cx, cy, pitchDeg);
-			fisheyeRay(rayB, cx, cy);
-			rayOut.set(rayA).lerp(rayB, p);
-		} else if (fovx < 300.0F) {
-			double lin = (fovx - 220.0) / 80.0;
-			float p = (float) (1.0 - (lin - 1.0) * (lin - 1.0));
-			fisheyeRay(rayA, cx, cy);
-			mercatorRay(rayB, cx, cy);
-			rayOut.set(rayA).lerp(rayB, p);
-		} else if (fovx < 340.0F) {
-			mercatorRay(rayOut, cx, cy);
-		} else if (fovx < 360.0F) {
-			mercatorRay(rayA, cx, cy);
-			if (!equirectRay(rayB, cx, cy)) {
-				rayB.set(0.0F, 0.0F, 0.0F);
-			}
-			rayOut.set(rayA).lerp(rayB, (fovx - 340.0F) / 20.0F);
-		} else if (!equirectRay(rayOut, cx, cy)) {
-			return false;
-		}
-		rayOut.z = -rayOut.z;
-		if (rear) {
-			rayOut.x = -rayOut.x;
-			rayOut.z = -rayOut.z;
-		}
-		return rayOut.lengthSquared() > 1.0e-12F;
-	}
-
-	private int requiredFaceSize(float projW, float fovx) {
-		double rad = fovx * DEG2RAD;
-		double panini = projW / (4.0 * Math.tan(Math.min(fovx, 290.0) * DEG2RAD / 4.0));
-		double mercator = projW / rad;
-		double density = Math.max(panini, mercator);
-		if (fovx < 160.0) {
-			density = Math.max(density, projW / (2.0 * Math.tan(rad / 2.0)));
-		}
-		int rounded = (int) (Math.ceil(2.0 * density / 128.0) * 128);
-		int cap = Mth.clamp(config().faceSizeCap, 256, 4096);
-		return Mth.clamp(rounded, 256, cap);
-	}
-
-	private int halvedSize(int fullSize) {
-		int rounded = ((fullSize / 2 + 127) / 128) * 128;
-		return Math.max(256, rounded);
-	}
-
-	private void ensureResources(int fullSize, int lowSize, int centerFace) {
-		GpuDevice device = RenderSystem.getDevice();
-		if (resourceDevice != device) {
-			for (int i = 0; i < 6; i++) {
-				faces[i] = null;
-				faceSizes[i] = 0;
-				outlineFaces[i] = null;
-				outlineFaceSizes[i] = 0;
-			}
-			pipeline = null;
-			uboBuffer = null;
-			uboBufferOutline = null;
-			uboSize = -1;
-			resourceDevice = device;
-		}
-
-		for (int k = 0; k < 6; k++) {
-			if (!faceEnabled[k]) {
-				continue;
-			}
-			int target = ((k == 4 || k == 5) && k != centerFace) ? lowSize : fullSize;
-			if (faces[k] == null) {
-				faces[k] = new TextureTarget("fov360_face_" + k, target, target, true, GpuFormat.RGBA8_UNORM);
-			} else if (faceSizes[k] != target) {
-				faces[k].resize(target, target);
-			}
-			if (outlineFaces[k] == null) {
-				outlineFaces[k] = new TextureTarget("fov360_outline_" + k, target, target, true, GpuFormat.RGBA8_UNORM);
-				outlineFaceSizes[k] = target;
-			} else if (outlineFaceSizes[k] != target) {
-				outlineFaces[k].resize(target, target);
-				outlineFaceSizes[k] = target;
-			}
-			if (faceSizes[k] == target) {
-				continue;
-			}
-			faceSizes[k] = target;
-		}
-
-		if (pipeline == null) {
-			RenderPipeline.Builder builder = RenderPipeline.builder(RenderPipelines.POST_PROCESSING_SNIPPET)
-				.withLocation(Identifier.fromNamespaceAndPath("fov360", "pipeline/fov360"))
-				.withVertexShader(Identifier.withDefaultNamespace("core/screenquad"))
-				.withFragmentShader(Identifier.fromNamespaceAndPath("fov360", "post/fov360"));
-			BindGroupLayout.Builder bindGroup = BindGroupLayout.builder();
-			for (int i = 0; i < 6; i++) {
-				bindGroup.withSampler("Face" + i + "Sampler");
-			}
-			bindGroup.withUniform("PaniniConfig", UniformType.UNIFORM_BUFFER);
-			builder.withBindGroupLayout(bindGroup.build());
-			pipeline = builder.build();
-		}
-
-		if (uboBuffer == null) {
-			Std140SizeCalculator calc = new Std140SizeCalculator();
-			for (int i = 0; i < 6; i++) {
-				calc.putMat4f();
-			}
-			for (int i = 0; i < 6; i++) {
-				calc.putVec4();
-			}
-			uboSize = calc.get();
-			uboBuffer = device.createBuffer(
-				() -> "PaniniConfig",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				uboSize);
-		}
-
-		if (uboBufferOutline == null) {
-			uboBufferOutline = device.createBuffer(
-				() -> "PaniniConfigOutline",
-				GpuBuffer.USAGE_UNIFORM | GpuBuffer.USAGE_MAP_WRITE,
-				uboSize);
-		}
-	}
-
-	private void reproject(Minecraft client, float viewPitch, int outH, float projW,
-			float aspect, boolean split, boolean invert, float fovx) {
-		RenderTarget out = client.gameRenderer.mainRenderTarget();
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		writeUbo(encoder, uboBuffer, fovx, aspect, viewPitch, projW, outH, split, invert, false);
-		runReprojectPass(encoder, "fov360 reproject", uboBuffer, faces, out);
-	}
-
-	private void reprojectOutline(float projW, int outH, boolean split, boolean invert, float fovx,
-			float viewPitch) {
-		if (outlineRedirect == null || savedOutlineTarget == null) {
-			return;
-		}
-		float aspect = projW / (float) outH;
-		CommandEncoder encoder = RenderSystem.getDevice().createCommandEncoder();
-		writeUbo(encoder, uboBufferOutline, fovx, aspect, viewPitch, projW, outH, split, invert, true);
-		runReprojectPass(encoder, "fov360 outline reproject", uboBufferOutline, outlineFaces, savedOutlineTarget);
-	}
-
-	private void writeUbo(CommandEncoder encoder, GpuBuffer ubo, float fovx, float aspect, float viewPitch,
-			float projW, int outH, boolean split, boolean invert, boolean outline) {
-		float aa = Mth.clamp(config().antialiasSamples, 1, 4);
-		try (GpuBufferSlice.MappedView view = ubo.map(false, true)) {
-			Std140Builder b = Std140Builder.intoBuffer(view.data());
-			for (int i = 0; i < 6; i++) {
-				b.putMat4f(coordFrames[i]);
-			}
-			b.putVec4(fovx, aspect, viewPitch, aa);
-			b.putVec4(projW, (float) outH, split ? 1.0F : 0.0F, invert ? 1.0F : 0.0F);
-			b.putVec4(scaleStd, scalePan, scaleSte, scaleMer);
-			b.putVec4(scaleEqu, outline ? 1.0F : 0.0F, scaleFish, 0.0F);
-			b.putVec4(en(0), en(1), en(2), en(3));
-			b.putVec4(en(4), en(5), 0.0F, 0.0F);
-		}
-	}
-
-	private void runReprojectPass(CommandEncoder encoder, String label, GpuBuffer ubo,
-			RenderTarget[] srcFaces, RenderTarget out) {
-		try (RenderPass pass = encoder.createRenderPass(
-				() -> label,
-				out.getColorTextureView(), Optional.empty(),
-				null, OptionalDouble.empty())) {
-			pass.setPipeline(pipeline);
-			RenderSystem.bindDefaultUniforms(pass);
-			pass.setUniform("PaniniConfig", ubo);
-			for (int i = 0; i < 6; i++) {
-				RenderTarget f = (faceEnabled[i] && srcFaces[i] != null) ? srcFaces[i] : srcFaces[0];
-				pass.bindTexture("Face" + i + "Sampler", f.getColorTextureView(), RenderSystem.getSamplerCache().getClampToEdge(FilterMode.NEAREST));
-			}
-			pass.draw(3, 1, 0, 0);
-		}
-	}
-
-	private void beginOutlineCapture(Minecraft client) {
-		LevelRendererAccessor lr = (LevelRendererAccessor) client.levelRenderer;
-		RenderTarget real = lr.panini$getEntityOutlineTarget();
-		if (real == null) {
-			outlineRedirect = null;
-			savedOutlineTarget = null;
-			captureOutlines = false;
-			return;
-		}
-		outlineRedirect = lr;
-		savedOutlineTarget = real;
-		captureOutlines = true;
-	}
-
-	private void endOutlineCapture() {
-		captureOutlines = false;
-		if (outlineRedirect != null) {
-			outlineRedirect.panini$setEntityOutlineTarget(savedOutlineTarget);
-		}
-	}
-
-	private void renderHand(Minecraft client, GameRenderer gameRenderer, float partialTicks, float worldPartialTicks) {
-		GameRendererInvoker inv = (GameRendererInvoker) gameRenderer;
-		GameRenderState renderState = gameRenderer.gameRenderState();
-		CameraRenderState cameraState = renderState.levelRenderState.cameraRenderState;
-		Window window = client.getWindow();
-
-		Projection hudProjection = inv.panini$hudProjection();
-		hudProjection.setupPerspective(
-			Camera.PROJECTION_Z_NEAR,
-			GameRenderer.PROJECTION_3D_HUD_Z_FAR,
-			cameraState.hudFov,
-			window.getWidth(),
-			window.getHeight());
-		RenderSystem.setProjectionMatrix(
-			inv.panini$hud3dProjectionMatrixBuffer().getBuffer(hudProjection),
-			ProjectionType.PERSPECTIVE);
-		RenderSystem.getDevice().createCommandEncoder()
-			.clearDepthTexture(gameRenderer.mainRenderTarget().getDepthTexture(), 0.0);
-		inv.panini$renderItemInHand(cameraState, partialTicks, cameraState.viewRotationMatrix);
-
-		SubmitNodeStorage handAndScreen = inv.panini$handAndScreenSubmitNodeStorage();
-		inv.panini$screenEffectRenderer().submit(
-			renderState.optionsRenderState.cameraType.isFirstPerson(),
-			cameraState.entityRenderState.isSleeping,
-			worldPartialTicks,
-			handAndScreen,
-			renderState.guiRenderState.isHudHidden);
-		gameRenderer.featureRenderDispatcher().renderAllFeatures(handAndScreen);
-	}
-
-	private float en(int i) {
-		return faceEnabled[i] ? 1.0F : 0.0F;
-	}
-
-	private float fovx(Minecraft client) {
-		int fovOption = client.options.fov().get();
-		return Mth.clamp(fovOption, 30.0F, 400.0F);
-	}
-
-	private float remapBoundaryFovx(float rawFov, float aspect) {
-		if (rawFov >= 180.0F) {
-			return rawFov;
-		}
-		float boundaryHorizontal = (float) Math.toDegrees(2.0 * Math.atan(aspect));
-		float offset = boundaryHorizontal - 90.0F;
-		float falloff = (180.0F - rawFov) / 90.0F;
-		return rawFov + offset * falloff;
-	}
-
-	private void fail(Throwable t) {
-		Main.LOGGER.error("360 FOV effect failed; this usually means another mod changed rendering internals the mixins depend on, check for mod incompatibilities before reporting", t);
-		throw new RuntimeException("360 FOV effect failed, likely a mod incompatibility", t);
-	}
+    public static final Fov360Renderer INSTANCE = new Fov360Renderer();
+
+    public static volatile boolean CAPTURING = false;
+
+    private final int[] faceTextures = new int[6];
+    private int faceSize = -1;
+
+    private int program;
+    private int vao;
+    private int vbo;
+    private boolean glReady;
+    private boolean failed;
+
+    private int uFovx;
+    private int uAspect;
+    private int uPitch;
+    private int uScales;
+    private int uScales2;
+
+    private Fov360Renderer() {
+    }
+
+    public boolean shouldRun(MinecraftClient client) {
+        return !failed && client != null && client.world != null && client.player != null && client.getCameraEntity() != null;
+    }
+
+    public void renderFrame(GameRenderer gameRenderer, float tickDelta, long limitTime, MatrixStack matrices) {
+        MinecraftClient client = MinecraftClient.getInstance();
+        if (!shouldRun(client)) {
+            gameRenderer.renderWorld(tickDelta, limitTime, matrices);
+            return;
+        }
+
+        Entity cameraEntity = client.getCameraEntity();
+        if (cameraEntity == null) {
+            gameRenderer.renderWorld(tickDelta, limitTime, matrices);
+            return;
+        }
+
+        float savedYaw = cameraEntity.getYaw();
+        float savedPitch = cameraEntity.getPitch();
+        float savedPrevYaw = cameraEntity.prevYaw;
+        float savedPrevPitch = cameraEntity.prevPitch;
+
+        float viewYaw = lerpAngle(tickDelta, savedPrevYaw, savedYaw);
+        float viewPitch = lerp(tickDelta, savedPrevPitch, savedPitch);
+
+        try {
+            Framebuffer framebuffer = client.getFramebuffer();
+            int size = Math.max(64, Math.min(framebuffer.textureWidth, framebuffer.textureHeight));
+            ensureGl(size);
+
+            CAPTURING = true;
+
+            // Extra cube faces. The caller mixin has temporarily disabled the hand.
+            for (int face = 1; face < 6; face++) {
+                setFace(cameraEntity, viewYaw, face);
+                gameRenderer.renderWorld(tickDelta, limitTime, new MatrixStack());
+                copyFace(framebuffer, face);
+            }
+
+            // Front face. The world is deliberately captured at horizon pitch;
+            // output pitch is applied by the reprojection shader.
+            setFace(cameraEntity, viewYaw, 0);
+            gameRenderer.renderWorld(tickDelta, limitTime, matrices);
+            copyFace(framebuffer, 0);
+
+            // Restore player/camera entity before any GUI/input code continues.
+            restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
+            CAPTURING = false;
+
+            float aspect = framebuffer.textureWidth / (float) framebuffer.textureHeight;
+            float rawFov = Fov360Config.INSTANCE.getFov();
+            float projectedFov = remapBoundaryFovx(rawFov, aspect);
+            reproject(framebuffer, projectedFov, aspect, viewPitch);
+        } catch (Throwable t) {
+            failed = true;
+            Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);
+            restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
+            CAPTURING = false;
+        }
+    }
+
+    private void setFace(Entity entity, float baseYaw, int face) {
+        float yaw = baseYaw;
+        float pitch = 0.0F;
+        switch (face) {
+            case 1 -> yaw = baseYaw + 90.0F;   // right
+            case 2 -> yaw = baseYaw + 180.0F;  // back
+            case 3 -> yaw = baseYaw - 90.0F;   // left
+            case 4 -> pitch = -90.0F;          // up
+            case 5 -> pitch = 90.0F;           // down
+            default -> { }
+        }
+        entity.setYaw(yaw);
+        entity.setPitch(pitch);
+        entity.prevYaw = yaw;
+        entity.prevPitch = pitch;
+    }
+
+    private void restoreEntity(Entity entity, float yaw, float pitch, float prevYaw, float prevPitch) {
+        entity.setYaw(yaw);
+        entity.setPitch(pitch);
+        entity.prevYaw = prevYaw;
+        entity.prevPitch = prevPitch;
+    }
+
+    private void ensureGl(int requestedFaceSize) {
+        if (!glReady) {
+            initProgramAndQuad();
+            for (int i = 0; i < faceTextures.length; i++) {
+                faceTextures[i] = GL11.glGenTextures();
+            }
+            glReady = true;
+        }
+        if (faceSize == requestedFaceSize) {
+            return;
+        }
+        faceSize = requestedFaceSize;
+        for (int texture : faceTextures) {
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, texture);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MIN_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_MAG_FILTER, GL11.GL_LINEAR);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_S, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexParameteri(GL11.GL_TEXTURE_2D, GL11.GL_TEXTURE_WRAP_T, GL12.GL_CLAMP_TO_EDGE);
+            GL11.glTexImage2D(GL11.GL_TEXTURE_2D, 0, GL11.GL_RGBA8, faceSize, faceSize, 0,
+                GL11.GL_RGBA, GL11.GL_UNSIGNED_BYTE, (ByteBuffer) null);
+        }
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+    }
+
+    private void copyFace(Framebuffer framebuffer, int face) {
+        framebuffer.beginWrite(false);
+        int x = Math.max(0, (framebuffer.textureWidth - faceSize) / 2);
+        int y = Math.max(0, (framebuffer.textureHeight - faceSize) / 2);
+        GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, faceTextures[face]);
+        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, x, y, faceSize, faceSize);
+        GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+    }
+
+    private void reproject(Framebuffer framebuffer, float fovx, float aspect, float pitchDegrees) {
+        framebuffer.beginWrite(true);
+
+        boolean depth = GL11.glIsEnabled(GL11.GL_DEPTH_TEST);
+        boolean blend = GL11.glIsEnabled(GL11.GL_BLEND);
+        boolean cull = GL11.glIsEnabled(GL11.GL_CULL_FACE);
+        int oldProgram = GL11.glGetInteger(GL20.GL_CURRENT_PROGRAM);
+        int oldVao = GL11.glGetInteger(GL30.GL_VERTEX_ARRAY_BINDING);
+        int oldActiveTexture = GL11.glGetInteger(GL13.GL_ACTIVE_TEXTURE);
+
+        GL11.glDisable(GL11.GL_DEPTH_TEST);
+        GL11.glDisable(GL11.GL_BLEND);
+        GL11.glDisable(GL11.GL_CULL_FACE);
+
+        GL20.glUseProgram(program);
+        GL30.glBindVertexArray(vao);
+
+        for (int i = 0; i < 6; i++) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, faceTextures[i]);
+        }
+
+        double half = Math.toRadians(fovx) * 0.5;
+        float scaleStd = (float) Math.tan(half);
+        float scalePan = (float) ((2.0 / (1.0 + Math.cos(half))) * Math.sin(half));
+        float scaleSte = (float) Math.tan(half * 0.5);
+        float scaleMer = (float) half;
+        float scaleEqu = (float) half;
+        float scaleFish = (float) half;
+
+        GL20.glUniform1f(uFovx, fovx);
+        GL20.glUniform1f(uAspect, aspect);
+        GL20.glUniform1f(uPitch, pitchDegrees);
+        GL20.glUniform4f(uScales, scaleStd, scalePan, scaleSte, scaleMer);
+        GL20.glUniform2f(uScales2, scaleEqu, scaleFish);
+
+        GL11.glDrawArrays(GL11.GL_TRIANGLE_STRIP, 0, 4);
+
+        for (int i = 0; i < 6; i++) {
+            GL13.glActiveTexture(GL13.GL_TEXTURE0 + i);
+            GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
+        }
+        GL13.glActiveTexture(oldActiveTexture);
+        GL30.glBindVertexArray(oldVao);
+        GL20.glUseProgram(oldProgram);
+
+        if (depth) GL11.glEnable(GL11.GL_DEPTH_TEST); else GL11.glDisable(GL11.GL_DEPTH_TEST);
+        if (blend) GL11.glEnable(GL11.GL_BLEND); else GL11.glDisable(GL11.GL_BLEND);
+        if (cull) GL11.glEnable(GL11.GL_CULL_FACE); else GL11.glDisable(GL11.GL_CULL_FACE);
+    }
+
+    private void initProgramAndQuad() {
+        int vertex = compile(GL20.GL_VERTEX_SHADER, VERTEX_SHADER);
+        int fragment = compile(GL20.GL_FRAGMENT_SHADER, FRAGMENT_SHADER);
+
+        program = GL20.glCreateProgram();
+        GL20.glAttachShader(program, vertex);
+        GL20.glAttachShader(program, fragment);
+        GL20.glBindAttribLocation(program, 0, "Position");
+        GL20.glBindAttribLocation(program, 1, "UV");
+        GL20.glLinkProgram(program);
+        if (GL20.glGetProgrami(program, GL20.GL_LINK_STATUS) == GL11.GL_FALSE) {
+            throw new IllegalStateException("360 FOV shader link failed: " + GL20.glGetProgramInfoLog(program));
+        }
+        GL20.glDetachShader(program, vertex);
+        GL20.glDetachShader(program, fragment);
+        GL20.glDeleteShader(vertex);
+        GL20.glDeleteShader(fragment);
+
+        GL20.glUseProgram(program);
+        for (int i = 0; i < 6; i++) {
+            int location = GL20.glGetUniformLocation(program, "Face" + i + "Sampler");
+            GL20.glUniform1i(location, i);
+        }
+        uFovx = GL20.glGetUniformLocation(program, "fovx");
+        uAspect = GL20.glGetUniformLocation(program, "aspect");
+        uPitch = GL20.glGetUniformLocation(program, "pitchDegrees");
+        uScales = GL20.glGetUniformLocation(program, "Scales");
+        uScales2 = GL20.glGetUniformLocation(program, "Scales2");
+        GL20.glUseProgram(0);
+
+        float[] vertices = {
+            -1.0F, -1.0F, 0.0F, 0.0F,
+             1.0F, -1.0F, 1.0F, 0.0F,
+            -1.0F,  1.0F, 0.0F, 1.0F,
+             1.0F,  1.0F, 1.0F, 1.0F
+        };
+        FloatBuffer data = BufferUtils.createFloatBuffer(vertices.length);
+        data.put(vertices).flip();
+
+        vao = GL30.glGenVertexArrays();
+        vbo = GL15.glGenBuffers();
+        GL30.glBindVertexArray(vao);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, vbo);
+        GL15.glBufferData(GL15.GL_ARRAY_BUFFER, data, GL15.GL_STATIC_DRAW);
+        int stride = 4 * Float.BYTES;
+        GL20.glEnableVertexAttribArray(0);
+        GL20.glVertexAttribPointer(0, 2, GL11.GL_FLOAT, false, stride, 0L);
+        GL20.glEnableVertexAttribArray(1);
+        GL20.glVertexAttribPointer(1, 2, GL11.GL_FLOAT, false, stride, 2L * Float.BYTES);
+        GL15.glBindBuffer(GL15.GL_ARRAY_BUFFER, 0);
+        GL30.glBindVertexArray(0);
+    }
+
+    private static int compile(int type, String source) {
+        int shader = GL20.glCreateShader(type);
+        GL20.glShaderSource(shader, source);
+        GL20.glCompileShader(shader);
+        if (GL20.glGetShaderi(shader, GL20.GL_COMPILE_STATUS) == GL11.GL_FALSE) {
+            throw new IllegalStateException("360 FOV shader compile failed: " + GL20.glGetShaderInfoLog(shader));
+        }
+        return shader;
+    }
+
+    private static float remapBoundaryFovx(float rawFov, float aspect) {
+        if (rawFov >= 180.0F) {
+            return rawFov;
+        }
+        float boundaryHorizontal = (float) Math.toDegrees(2.0 * Math.atan(aspect));
+        float offset = boundaryHorizontal - 90.0F;
+        float falloff = (180.0F - rawFov) / 90.0F;
+        return rawFov + offset * falloff;
+    }
+
+    private static float lerp(float delta, float start, float end) {
+        return start + delta * (end - start);
+    }
+
+    private static float lerpAngle(float delta, float start, float end) {
+        float d = (end - start) % 360.0F;
+        if (d < -180.0F) d += 360.0F;
+        if (d >= 180.0F) d -= 360.0F;
+        return start + delta * d;
+    }
+
+    private static final String VERTEX_SHADER = """
+        #version 150
+        in vec2 Position;
+        in vec2 UV;
+        out vec2 texCoord;
+        void main() {
+            texCoord = UV;
+            gl_Position = vec4(Position, 0.0, 1.0);
+        }
+        """;
+
+    private static final String FRAGMENT_SHADER = """
+        #version 150
+        #define M_PI 3.14159265358979323846
+
+        uniform sampler2D Face0Sampler;
+        uniform sampler2D Face1Sampler;
+        uniform sampler2D Face2Sampler;
+        uniform sampler2D Face3Sampler;
+        uniform sampler2D Face4Sampler;
+        uniform sampler2D Face5Sampler;
+        uniform float fovx;
+        uniform float aspect;
+        uniform float pitchDegrees;
+        uniform vec4 Scales;
+        uniform vec2 Scales2;
+
+        in vec2 texCoord;
+        out vec4 fragColor;
+
+        vec3 safeStandardInverse(vec2 lenscoord) {
+            float r = length(lenscoord);
+            if (r < 1.0e-7) return vec3(0.0, 0.0, 1.0);
+            float theta = atan(r);
+            float s = sin(theta) / r;
+            return vec3(lenscoord.x * s, lenscoord.y * s, cos(theta));
+        }
+
+        vec3 standardRay(vec2 c) {
+            return safeStandardInverse(c * Scales.x);
+        }
+
+        vec3 latlonToRay(float lat, float lon) {
+            return vec3(sin(lon) * cos(lat), sin(lat), cos(lon) * cos(lat));
+        }
+
+        vec3 paniniRay(vec2 c) {
+            vec2 p = c * Scales.y;
+            float x = p.x;
+            float y = p.y;
+            float d = 1.0;
+            float k = x*x / ((d+1.0)*(d+1.0));
+            float dscr = max(0.0, k*k*d*d - (k+1.0)*(k*d*d-1.0));
+            float clon = (-k*d + sqrt(dscr)) / (k+1.0);
+            float S = (d+1.0) / (d+clon);
+            float lon = atan(x, S*clon);
+            float lat = atan(y, S);
+            return latlonToRay(lat, lon);
+        }
+
+        vec3 stereographicRay(vec2 c) {
+            vec2 p = c * Scales.z;
+            float r = length(p);
+            if (r < 1.0e-7) return vec3(0.0, 0.0, 1.0);
+            float theta = atan(r) / 0.5;
+            float s = sin(theta) / r;
+            return vec3(p.x * s, p.y * s, cos(theta));
+        }
+
+        vec3 hybridStereoRay(vec2 c) {
+            return mix(paniniRay(c), stereographicRay(c), clamp(abs(pitchDegrees) / 90.0, 0.0, 1.0));
+        }
+
+        vec3 fisheyeRay(vec2 c) {
+            vec2 p = c * Scales2.y;
+            float r = length(p);
+            if (r < 1.0e-7) return vec3(0.0, 0.0, 1.0);
+            float s = sin(r) / r;
+            return vec3(p.x * s, p.y * s, cos(r));
+        }
+
+        vec3 mercatorRay(vec2 c) {
+            vec2 p = c * vec2(Scales.w);
+            return latlonToRay(atan(sinh(p.y)), p.x);
+        }
+
+        vec3 equirectRay(vec2 c) {
+            vec2 p = c * vec2(Scales2.x);
+            if (abs(p.y) > M_PI * 0.5) return vec3(0.0);
+            return latlonToRay(p.y, p.x);
+        }
+
+        vec3 screenToRay(vec2 c) {
+            vec3 ray;
+            if (fovx < 90.0) {
+                ray = standardRay(c);
+            } else if (fovx < 160.0) {
+                float linear = (fovx - 90.0) / 70.0;
+                float parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+                ray = mix(standardRay(c), hybridStereoRay(c), parabola);
+            } else if (fovx < 220.0) {
+                float linear = (fovx - 160.0) / 60.0;
+                float parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+                ray = mix(hybridStereoRay(c), fisheyeRay(c), parabola);
+            } else if (fovx < 300.0) {
+                float linear = (fovx - 220.0) / 80.0;
+                float parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+                ray = mix(fisheyeRay(c), mercatorRay(c), parabola);
+            } else if (fovx < 340.0) {
+                ray = mercatorRay(c);
+            } else if (fovx < 360.0) {
+                ray = mix(mercatorRay(c), equirectRay(c), (fovx - 340.0) / 20.0);
+            } else {
+                ray = equirectRay(c);
+            }
+
+            // Cube captures are horizon-aligned. Apply Minecraft pitch here:
+            // positive pitch looks down.
+            float p = radians(pitchDegrees);
+            float cp = cos(p);
+            float sp = sin(p);
+            return vec3(ray.x, ray.y * cp - ray.z * sp, ray.y * sp + ray.z * cp);
+        }
+
+        vec4 sampleFace(int face, vec2 uv) {
+            uv = clamp(uv, 0.0, 1.0);
+            if (face == 0) return texture(Face0Sampler, uv);
+            if (face == 1) return texture(Face1Sampler, uv);
+            if (face == 2) return texture(Face2Sampler, uv);
+            if (face == 3) return texture(Face3Sampler, uv);
+            if (face == 4) return texture(Face4Sampler, uv);
+            return texture(Face5Sampler, uv);
+        }
+
+        vec4 rayToColor(vec3 r) {
+            vec3 a = abs(r);
+            int face;
+            vec2 uv;
+
+            if (a.z >= a.x && a.z >= a.y) {
+                if (r.z >= 0.0) {
+                    face = 0;
+                    uv = vec2(0.5 + r.x/(2.0*r.z), 0.5 + r.y/(2.0*r.z));
+                } else {
+                    face = 2;
+                    float d = -r.z;
+                    uv = vec2(0.5 - r.x/(2.0*d), 0.5 + r.y/(2.0*d));
+                }
+            } else if (a.x >= a.y) {
+                if (r.x >= 0.0) {
+                    face = 1;
+                    uv = vec2(0.5 - r.z/(2.0*r.x), 0.5 + r.y/(2.0*r.x));
+                } else {
+                    face = 3;
+                    float d = -r.x;
+                    uv = vec2(0.5 + r.z/(2.0*d), 0.5 + r.y/(2.0*d));
+                }
+            } else {
+                if (r.y >= 0.0) {
+                    face = 4;
+                    uv = vec2(0.5 + r.x/(2.0*r.y), 0.5 - r.z/(2.0*r.y));
+                } else {
+                    face = 5;
+                    float d = -r.y;
+                    uv = vec2(0.5 + r.x/(2.0*d), 0.5 + r.z/(2.0*d));
+                }
+            }
+            return sampleFace(face, uv);
+        }
+
+        void main() {
+            vec2 screen = (texCoord - vec2(0.5)) * vec2(2.0, 2.0 / aspect);
+            vec3 ray = screenToRay(screen);
+            if (length(ray) < 1.0e-7) {
+                fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+            } else {
+                fragColor = rayToColor(normalize(ray));
+            }
+        }
+        """;
 }

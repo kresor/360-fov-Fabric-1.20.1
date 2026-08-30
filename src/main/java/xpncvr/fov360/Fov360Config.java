@@ -1,47 +1,54 @@
 package xpncvr.fov360;
 
-import com.google.gson.Gson;
-import com.google.gson.GsonBuilder;
 import net.fabricmc.loader.api.FabricLoader;
 
 import java.io.IOException;
-import java.io.Reader;
-import java.io.Writer;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Properties;
 
 public final class Fov360Config {
-	public boolean splitScreen = false;
+    public static final Fov360Config INSTANCE = new Fov360Config();
 
-	public boolean invertSplitScreen = false;
+    private static final float DEFAULT_FOV = 120.0F;
+    private float fov = DEFAULT_FOV;
 
-	public int faceSizeCap = 2048;
+    private Fov360Config() {
+    }
 
-	public boolean lowResTopBottomFaces = false;
+    public void load() {
+        Path path = FabricLoader.getInstance().getConfigDir().resolve("fov360-1.20.1.properties");
+        Properties properties = new Properties();
 
-	public int antialiasSamples = 4;
+        if (Files.isRegularFile(path)) {
+            try (InputStream in = Files.newInputStream(path)) {
+                properties.load(in);
+                fov = clamp(Float.parseFloat(properties.getProperty("fov", Float.toString(DEFAULT_FOV))), 90.0F, 360.0F);
+            } catch (Exception e) {
+                Main.LOGGER.warn("Could not read {}, using FOV {}", path, DEFAULT_FOV, e);
+                fov = DEFAULT_FOV;
+            }
+        }
 
-	public static Fov360Config load() {
-		Gson gson = new GsonBuilder().setPrettyPrinting().create();
-		Path path = FabricLoader.getInstance().getConfigDir().resolve("fov360.json");
-		if (Files.exists(path)) {
-			try (Reader reader = Files.newBufferedReader(path)) {
-				Fov360Config config = gson.fromJson(reader, Fov360Config.class);
-				if (config != null) {
-					return config;
-				}
-				Main.LOGGER.warn("Empty config at {}; using defaults", path);
-			} catch (IOException | RuntimeException e) {
-				Main.LOGGER.warn("Failed to read config at {}; using defaults", path, e);
-			}
-			return new Fov360Config();
-		}
-		Fov360Config config = new Fov360Config();
-		try (Writer writer = Files.newBufferedWriter(path)) {
-			gson.toJson(config, writer);
-		} catch (IOException e) {
-			Main.LOGGER.warn("Failed to write default config to {}", path, e);
-		}
-		return config;
-	}
+        properties.setProperty("fov", Float.toString(fov));
+        properties.setProperty("note", "Raw 360-FOV slider equivalent. 120 is the tested 5120x1440 starting point.");
+        try {
+            Files.createDirectories(path.getParent());
+            try (OutputStream out = Files.newOutputStream(path)) {
+                properties.store(out, "360 FOV Fabric 1.20.1 experimental backport");
+            }
+        } catch (IOException e) {
+            Main.LOGGER.warn("Could not write {}", path, e);
+        }
+    }
+
+    public float getFov() {
+        return fov;
+    }
+
+    private static float clamp(float value, float min, float max) {
+        return Math.max(min, Math.min(max, value));
+    }
 }

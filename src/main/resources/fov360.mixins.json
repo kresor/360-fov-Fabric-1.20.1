@@ -1,33 +1,12 @@
 {
-	"required": true,
-	"package": "xpncvr.fov360.mixin",
-	"client": [
-		"AtmosphericFogEnvironmentMixin",
-		"CameraMixin",
-		"ConduitRendererMixin",
-		"DragonFireballRendererMixin",
-		"EntityRenderDispatcherMixin",
-		"EntityRendererMixin",
-		"ExperienceOrbRendererMixin",
-		"FireworkEntityRendererMixin",
-		"FishingHookRendererMixin",
-		"GameRendererInvoker",
-		"GameRendererMixin",
-		"GameRendererTargetMixin",
-		"GuiRendererMixin",
-		"LevelExtractorMixin",
-		"LevelRendererAccessor",
-		"MouseHandlerMixin",
-		"NameTagStorageMixin",
-		"OptionsMixin",
-		"ParticleAccessor",
-		"ScreenEffectRendererMixin",
-		"SingleQuadParticleMixin",
-		"SkyRendererMixin",
-		"ThrownItemRendererMixin",
-		"WindowMixin"
-	],
-	"injectors": {
-		"defaultRequire": 1
-	}
+  "required": true,
+  "minVersion": "0.8",
+  "package": "xpncvr.fov360.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "GameRendererMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
 }

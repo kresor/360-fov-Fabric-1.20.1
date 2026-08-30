@@ -1,14 +1,16 @@
 package xpncvr.fov360;
 
-import net.fabricmc.api.ModInitializer;
+import net.fabricmc.api.ClientModInitializer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-public class Main implements ModInitializer {
-	public static final Logger LOGGER = LoggerFactory.getLogger("fov360");
+public final class Main implements ClientModInitializer {
+    public static final Logger LOGGER = LoggerFactory.getLogger("fov360");
 
-	@Override
-	public void onInitialize() {
-		LOGGER.info("360 FOV initialised");
-	}
+    @Override
+    public void onInitializeClient() {
+        Fov360Config.INSTANCE.load();
+        LOGGER.info("360 FOV 1.20.1 experimental backport initialized (target FOV {} degrees)",
+            Fov360Config.INSTANCE.getFov());
+    }
 }
