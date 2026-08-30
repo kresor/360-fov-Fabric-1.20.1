@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "id": "fov360",
+  "version": "${version}",
+  "name": "360 FOV - 1.20.1 Backport",
+  "description": "Experimental Fabric 1.20.1 backport using cube-face capture and 360 FOV-style reprojection.",
+  "authors": ["xpncvr", "1.20.1 backport work"],
+  "contact": {
+    "homepage": "https://github.com/xpncvr/360-fov",
+    "sources": "https://github.com/kresor/360-fov-Fabric-1.20.1"
+  },
+  "license": "AGPL-3.0-or-later",
+  "icon": "assets/fov360/icon.png",
+  "environment": "client",
+  "entrypoints": {
+    "client": ["xpncvr.fov360.Main"]
+  },
+  "mixins": ["fov360.mixins.json"],
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "minecraft": "~1.20.1",
+    "java": ">=17"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "xpncvr.fov360.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "client": [
+    "GameRendererMixin",
+    "GameOptionsMixin",
+    "GameRendererInvoker"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}
