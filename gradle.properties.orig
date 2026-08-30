@@ -1,0 +1,12 @@
+org.gradle.jvmargs=-Xmx4G
+org.gradle.parallel=true
+
+minecraft_version=26.2
+loader_version=0.19.3
+loom_version=1.17-SNAPSHOT
+
+fabric_api_version=0.158.0+26.2
+
+mod_version=1.0.0
+maven_group=xpncvr.fov360
+archives_base_name=fov360

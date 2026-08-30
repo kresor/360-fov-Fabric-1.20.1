@@ -17,8 +17,8 @@
 		"fov360.mixins.json"
 	],
 	"depends": {
-		"minecraft": "~1.20.1",
-		"java": ">=17"
+		"minecraft": "~26.2",
+		"java": ">=25"
 	},
     "entrypoints": {
       "main": [
