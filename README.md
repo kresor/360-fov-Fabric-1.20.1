@@ -1,17 +1,18 @@
-# 360 FOV Fabric 1.20.1 - Attempt 11
+# 360 FOV - Fabric 1.20.1 experimental backport (Attempt 12)
 
-Experimental Fabric 1.20.1 backport with corrected ultrawide projection and a proper off-screen capture performance path.
+Quality-preserving optimization pass based on the known-good Attempt 8 renderer.
 
-Attempt 11 is based on the visually working Attempt 8 renderer. Unlike Attempt 10, it does not shrink the viewport inside the real window framebuffer. It renders cube faces into a dedicated square `SimpleFramebuffer`, then reprojects them into the real display framebuffer.
+## Attempt 12 strategy
 
-Recommended test:
+Rather than lowering cubemap resolution, this version keeps the original full-quality capture and skips cube directions that the final projection cannot see.
 
-- 5120x1440
-- FOV 120
-- shaders off
-- `captureScale=0.75`
-- `skipBackFace=true`
+At **5120x1440 / FOV 120** a level view normally needs only front + left + right. Top/bottom are enabled as pitch requires them. The rear face appears only at sufficiently extreme FOV/projection combinations.
 
-Config file after launch:
+## Test baseline
 
-`config/fov360-1.20.1.properties`
+- Minecraft / Fabric: 1.20.1
+- Resolution: 5120x1440
+- FOV: 120
+- Shaders: OFF
+- Compare image quality directly with Attempt 8
+- Compare FPS directly with Attempt 8

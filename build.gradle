@@ -33,8 +33,6 @@ sourceSets {
             include "xpncvr/fov360/Fov360Renderer.java"
             include "xpncvr/fov360/mixin/GameRendererMixin.java"
             include "xpncvr/fov360/mixin/GameOptionsMixin.java"
-            include "xpncvr/fov360/mixin/MinecraftClientMixin.java"
-            include "xpncvr/fov360/mixin/WindowMixin.java"
         }
     }
 }

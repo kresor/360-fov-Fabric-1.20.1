@@ -12,11 +12,8 @@ import java.util.Properties;
 public final class Fov360Config {
     public static final Fov360Config INSTANCE = new Fov360Config();
 
-    private static final float DEFAULT_CAPTURE_SCALE = 0.75F;
-    private static final boolean DEFAULT_SKIP_BACK_FACE = true;
-
-    private float captureScale = DEFAULT_CAPTURE_SCALE;
-    private boolean skipBackFace = DEFAULT_SKIP_BACK_FACE;
+    private static final float DEFAULT_FOV = 120.0F;
+    private float fov = DEFAULT_FOV;
 
     private Fov360Config() {
     }
@@ -28,21 +25,15 @@ public final class Fov360Config {
         if (Files.isRegularFile(path)) {
             try (InputStream in = Files.newInputStream(path)) {
                 properties.load(in);
-                captureScale = clamp(Float.parseFloat(properties.getProperty("captureScale", Float.toString(DEFAULT_CAPTURE_SCALE))), 0.25F, 1.0F);
-                skipBackFace = Boolean.parseBoolean(properties.getProperty("skipBackFace", Boolean.toString(DEFAULT_SKIP_BACK_FACE)));
+                fov = clamp(Float.parseFloat(properties.getProperty("fov", Float.toString(DEFAULT_FOV))), 90.0F, 360.0F);
             } catch (Exception e) {
-                Main.LOGGER.warn("Could not read {}, using performance defaults", path, e);
-                captureScale = DEFAULT_CAPTURE_SCALE;
-                skipBackFace = DEFAULT_SKIP_BACK_FACE;
+                Main.LOGGER.warn("Could not read {}, using FOV {}", path, DEFAULT_FOV, e);
+                fov = DEFAULT_FOV;
             }
         }
 
-        properties.setProperty("captureScale", Float.toString(captureScale));
-        properties.setProperty("skipBackFace", Boolean.toString(skipBackFace));
-        properties.setProperty("note", "Minecraft FOV slider controls projected FOV. 120 is the tested 5120x1440 baseline.");
-        properties.setProperty("captureScale.comment", "0.75 balanced; 0.5 faster/softer; 1.0 sharpest/slowest.");
-        properties.setProperty("skipBackFace.comment", "Skips rear cube render when projected FOV is safely below 180 degrees.");
-
+        properties.setProperty("fov", Float.toString(fov));
+        properties.setProperty("note", "Raw 360-FOV slider equivalent. 120 is the tested 5120x1440 starting point.");
         try {
             Files.createDirectories(path.getParent());
             try (OutputStream out = Files.newOutputStream(path)) {
@@ -53,12 +44,8 @@ public final class Fov360Config {
         }
     }
 
-    public float getCaptureScale() {
-        return captureScale;
-    }
-
-    public boolean isSkipBackFace() {
-        return skipBackFace;
+    public float getFov() {
+        return fov;
     }
 
     private static float clamp(float value, float min, float max) {

@@ -2,7 +2,6 @@ package xpncvr.fov360;
 
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
-import net.minecraft.client.gl.SimpleFramebuffer;
 import net.minecraft.client.render.GameRenderer;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
@@ -22,18 +21,15 @@ import java.nio.FloatBuffer;
  * render six 90 degree cube faces, copy the centre square of the vanilla
  * framebuffer, then reproject those faces with the 360-FOV projection curve.
  *
- * This first rewrite is intentionally first-person focused. It omits the modern
- * 26.x render-state/entity-billboard patches until the core projection is proven.
+ * Attempt 12 preserves the proven full-quality Attempt 8 capture path and adds
+ * dynamic cubemap face culling so invisible directions are not rendered.
  */
 public final class Fov360Renderer {
     public static final Fov360Renderer INSTANCE = new Fov360Renderer();
 
     public static volatile boolean CAPTURING = false;
-    private static volatile Framebuffer CAPTURE_TARGET = null;
-    private static volatile int ACTIVE_CAPTURE_SIZE = -1;
 
     private final int[] faceTextures = new int[6];
-    private SimpleFramebuffer captureFramebuffer;
     private int faceSize = -1;
 
     private int program;
@@ -49,14 +45,6 @@ public final class Fov360Renderer {
     private int uScales2;
 
     private Fov360Renderer() {
-    }
-
-    public static Framebuffer getCaptureTargetOverride() {
-        return CAPTURING ? CAPTURE_TARGET : null;
-    }
-
-    public static int getActiveCaptureSize() {
-        return CAPTURING ? ACTIVE_CAPTURE_SIZE : -1;
     }
 
     public boolean shouldRun(MinecraftClient client) {
@@ -76,9 +64,6 @@ public final class Fov360Renderer {
             return;
         }
 
-        // Resolve the real window framebuffer before CAPTURING is enabled.
-        Framebuffer outputFramebuffer = client.getFramebuffer();
-
         float savedYaw = cameraEntity.getYaw();
         float savedPitch = cameraEntity.getPitch();
         float savedPrevYaw = cameraEntity.prevYaw;
@@ -88,61 +73,51 @@ public final class Fov360Renderer {
         float viewPitch = lerp(tickDelta, savedPrevPitch, savedPitch);
 
         try {
-            float aspect = outputFramebuffer.textureWidth / (float) outputFramebuffer.textureHeight;
+            Framebuffer framebuffer = client.getFramebuffer();
+            int size = Math.max(64, Math.min(framebuffer.textureWidth, framebuffer.textureHeight));
+            ensureGl(size);
+
+            float aspect = framebuffer.textureWidth / (float) framebuffer.textureHeight;
             float rawFov = Math.max(30.0F, Math.min(400.0F, client.options.getFov().getValue()));
             float projectedFov = remapBoundaryFovx(rawFov, aspect);
+            boolean[] visibleFaces = determineVisibleFaces(projectedFov, aspect, viewPitch);
 
-            int baseSize = Math.max(64, Math.min(outputFramebuffer.textureWidth, outputFramebuffer.textureHeight));
-            int size = Math.max(256, Math.min(baseSize, Math.round(baseSize * Fov360Config.INSTANCE.getCaptureScale())));
-            ensureGl(size);
-            ensureCaptureFramebuffer(size);
-
-            boolean renderBackFace = !Fov360Config.INSTANCE.isSkipBackFace() || projectedFov >= 165.0F;
-
-            CAPTURE_TARGET = captureFramebuffer;
-            ACTIVE_CAPTURE_SIZE = size;
             CAPTURING = true;
 
+            // Side/back/up/down cube captures must never contain the player's
+            // first-person hand. Only the front capture gets it.
             gameRenderer.setRenderHand(false);
             for (int face = 1; face < 6; face++) {
-                if (face == 2 && !renderBackFace) {
+                if (!visibleFaces[face]) {
                     continue;
                 }
-                renderCaptureFace(gameRenderer, cameraEntity, viewYaw, tickDelta, limitTime, face, false, new MatrixStack());
+                setFace(cameraEntity, viewYaw, face);
+                gameRenderer.renderWorld(tickDelta, limitTime, new MatrixStack());
+                copyFace(framebuffer, face);
             }
 
+            // Front face. Restore the caller's hand-rendering state so the
+            // held item/hand is captured once rather than six times. This is a
+            // pragmatic 1.20.1 implementation; a later pass can render the hand
+            // after reprojection if a mod exposes edge cases here.
             gameRenderer.setRenderHand(renderHand);
-            renderCaptureFace(gameRenderer, cameraEntity, viewYaw, tickDelta, limitTime, 0, renderHand, matrices);
+            setFace(cameraEntity, viewYaw, 0);
+            gameRenderer.renderWorld(tickDelta, limitTime, matrices);
+            copyFace(framebuffer, 0);
 
+            // Restore player/camera entity before any GUI/input code continues.
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
             gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
-            CAPTURE_TARGET = null;
-            ACTIVE_CAPTURE_SIZE = -1;
 
-            outputFramebuffer.beginWrite(true);
-            reproject(outputFramebuffer, projectedFov, aspect, viewPitch);
+            reproject(framebuffer, projectedFov, aspect, viewPitch);
         } catch (Throwable t) {
             failed = true;
             Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
             gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
-            CAPTURE_TARGET = null;
-            ACTIVE_CAPTURE_SIZE = -1;
-            outputFramebuffer.beginWrite(true);
         }
-    }
-
-    private void renderCaptureFace(GameRenderer gameRenderer, Entity cameraEntity, float viewYaw,
-                                   float tickDelta, long limitTime, int face, boolean renderHand, MatrixStack matrices) {
-        captureFramebuffer.beginWrite(true);
-        captureFramebuffer.clear(MinecraftClient.IS_SYSTEM_MAC);
-        captureFramebuffer.beginWrite(true);
-        gameRenderer.setRenderHand(renderHand);
-        setFace(cameraEntity, viewYaw, face);
-        gameRenderer.renderWorld(tickDelta, limitTime, matrices);
-        copyFace(face);
     }
 
     private void setFace(Entity entity, float baseYaw, int face) {
@@ -169,17 +144,6 @@ public final class Fov360Renderer {
         entity.prevPitch = prevPitch;
     }
 
-    private void ensureCaptureFramebuffer(int requestedSize) {
-        if (captureFramebuffer == null) {
-            captureFramebuffer = new SimpleFramebuffer(requestedSize, requestedSize, true, MinecraftClient.IS_SYSTEM_MAC);
-            captureFramebuffer.setClearColor(0.0F, 0.0F, 0.0F, 1.0F);
-            return;
-        }
-        if (captureFramebuffer.textureWidth != requestedSize || captureFramebuffer.textureHeight != requestedSize) {
-            captureFramebuffer.resize(requestedSize, requestedSize, MinecraftClient.IS_SYSTEM_MAC);
-        }
-    }
-
     private void ensureGl(int requestedFaceSize) {
         if (!glReady) {
             initProgramAndQuad();
@@ -204,11 +168,13 @@ public final class Fov360Renderer {
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
-    private void copyFace(int face) {
-        captureFramebuffer.beginWrite(false);
+    private void copyFace(Framebuffer framebuffer, int face) {
+        framebuffer.beginWrite(false);
+        int x = Math.max(0, (framebuffer.textureWidth - faceSize) / 2);
+        int y = Math.max(0, (framebuffer.textureHeight - faceSize) / 2);
         GL11.glReadBuffer(GL30.GL_COLOR_ATTACHMENT0);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, faceTextures[face]);
-        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, 0, 0, faceSize, faceSize);
+        GL11.glCopyTexSubImage2D(GL11.GL_TEXTURE_2D, 0, 0, 0, x, y, faceSize, faceSize);
         GL11.glBindTexture(GL11.GL_TEXTURE_2D, 0);
     }
 
@@ -261,6 +227,178 @@ public final class Fov360Renderer {
         if (depth) GL11.glEnable(GL11.GL_DEPTH_TEST); else GL11.glDisable(GL11.GL_DEPTH_TEST);
         if (blend) GL11.glEnable(GL11.GL_BLEND); else GL11.glDisable(GL11.GL_BLEND);
         if (cull) GL11.glEnable(GL11.GL_CULL_FACE); else GL11.glDisable(GL11.GL_CULL_FACE);
+    }
+
+
+    /**
+     * Determine which cubemap faces can actually be sampled by the final
+     * projection. This keeps Attempt 8's full-resolution capture quality but
+     * avoids rendering faces that are invisible at the current FOV/pitch.
+     *
+     * A modest screen-space grid is intentionally conservative. We also render
+     * the front face unconditionally because it contains the first-person hand
+     * and is the dominant face for normal play.
+     */
+    private boolean[] determineVisibleFaces(float fovx, float aspect, float pitchDegrees) {
+        boolean[] visible = new boolean[6];
+        visible[0] = true;
+
+        final int samplesX = 33;
+        final int samplesY = 17;
+        for (int iy = 0; iy < samplesY; iy++) {
+            float sy = -1.0F + 2.0F * iy / (samplesY - 1.0F);
+            float y = sy / aspect;
+            for (int ix = 0; ix < samplesX; ix++) {
+                float x = -1.0F + 2.0F * ix / (samplesX - 1.0F);
+                Vec3 ray = screenToRayCpu(x, y, fovx, pitchDegrees);
+                visible[classifyCubeFace(ray)] = true;
+            }
+        }
+
+        return visible;
+    }
+
+    private Vec3 screenToRayCpu(float x, float y, float fovx, float pitchDegrees) {
+        double half = Math.toRadians(fovx) * 0.5;
+        double scaleStd = Math.tan(half);
+        double scalePan = (2.0 / (1.0 + Math.cos(half))) * Math.sin(half);
+        double scaleSte = Math.tan(half * 0.5);
+        double scaleMer = half;
+        double scaleEqu = half;
+        double scaleFish = half;
+
+        Vec3 ray;
+        if (fovx < 90.0F) {
+            ray = standardRayCpu(x, y, scaleStd);
+        } else if (fovx < 160.0F) {
+            double linear = (fovx - 90.0) / 70.0;
+            double parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+            Vec3 standard = standardRayCpu(x, y, scaleStd);
+            Vec3 hybrid = hybridStereoRayCpu(x, y, scalePan, scaleSte, pitchDegrees);
+            ray = mix(standard, hybrid, parabola);
+        } else if (fovx < 220.0F) {
+            double linear = (fovx - 160.0) / 60.0;
+            double parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+            Vec3 hybrid = hybridStereoRayCpu(x, y, scalePan, scaleSte, pitchDegrees);
+            Vec3 fish = fisheyeRayCpu(x, y, scaleFish);
+            ray = mix(hybrid, fish, parabola);
+        } else if (fovx < 300.0F) {
+            double linear = (fovx - 220.0) / 80.0;
+            double parabola = 1.0 - (linear - 1.0) * (linear - 1.0);
+            Vec3 fish = fisheyeRayCpu(x, y, scaleFish);
+            Vec3 merc = mercatorRayCpu(x, y, scaleMer);
+            ray = mix(fish, merc, parabola);
+        } else if (fovx < 340.0F) {
+            ray = mercatorRayCpu(x, y, scaleMer);
+        } else if (fovx < 360.0F) {
+            Vec3 merc = mercatorRayCpu(x, y, scaleMer);
+            Vec3 equ = equirectRayCpu(x, y, scaleEqu);
+            ray = mix(merc, equ, (fovx - 340.0) / 20.0);
+        } else {
+            ray = equirectRayCpu(x, y, scaleEqu);
+        }
+
+        double p = Math.toRadians(pitchDegrees);
+        double cp = Math.cos(p);
+        double sp = Math.sin(p);
+        return normalize(new Vec3(ray.x, ray.y * cp - ray.z * sp, ray.y * sp + ray.z * cp));
+    }
+
+    private Vec3 standardRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        double r = Math.hypot(px, py);
+        if (r < 1.0e-9) return new Vec3(0.0, 0.0, 1.0);
+        double theta = Math.atan(r);
+        double ss = Math.sin(theta) / r;
+        return new Vec3(px * ss, py * ss, Math.cos(theta));
+    }
+
+    private Vec3 paniniRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        double d = 1.0;
+        double k = px * px / ((d + 1.0) * (d + 1.0));
+        double disc = Math.max(0.0, k * k * d * d - (k + 1.0) * (k * d * d - 1.0));
+        double clon = (-k * d + Math.sqrt(disc)) / (k + 1.0);
+        double ss = (d + 1.0) / (d + clon);
+        double lon = Math.atan2(px, ss * clon);
+        double lat = Math.atan2(py, ss);
+        return latlonToRayCpu(lat, lon);
+    }
+
+    private Vec3 stereographicRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        double r = Math.hypot(px, py);
+        if (r < 1.0e-9) return new Vec3(0.0, 0.0, 1.0);
+        double theta = Math.atan(r) / 0.5;
+        double ss = Math.sin(theta) / r;
+        return new Vec3(px * ss, py * ss, Math.cos(theta));
+    }
+
+    private Vec3 hybridStereoRayCpu(double x, double y, double panScale, double stereoScale, double pitchDegrees) {
+        double t = Math.min(1.0, Math.abs(pitchDegrees) / 90.0);
+        return mix(paniniRayCpu(x, y, panScale), stereographicRayCpu(x, y, stereoScale), t);
+    }
+
+    private Vec3 fisheyeRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        double r = Math.hypot(px, py);
+        if (r < 1.0e-9) return new Vec3(0.0, 0.0, 1.0);
+        double ss = Math.sin(r) / r;
+        return new Vec3(px * ss, py * ss, Math.cos(r));
+    }
+
+    private Vec3 mercatorRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        return latlonToRayCpu(Math.atan(Math.sinh(py)), px);
+    }
+
+    private Vec3 equirectRayCpu(double x, double y, double scale) {
+        double px = x * scale;
+        double py = y * scale;
+        if (Math.abs(py) > Math.PI * 0.5) return new Vec3(0.0, 0.0, 0.0);
+        return latlonToRayCpu(py, px);
+    }
+
+    private Vec3 latlonToRayCpu(double lat, double lon) {
+        return new Vec3(Math.sin(lon) * Math.cos(lat), Math.sin(lat), Math.cos(lon) * Math.cos(lat));
+    }
+
+    private int classifyCubeFace(Vec3 r) {
+        double ax = Math.abs(r.x);
+        double ay = Math.abs(r.y);
+        double az = Math.abs(r.z);
+        if (az >= ax && az >= ay) return r.z >= 0.0 ? 0 : 2;
+        if (ax >= ay) return r.x >= 0.0 ? 1 : 3;
+        return r.y >= 0.0 ? 4 : 5;
+    }
+
+    private Vec3 mix(Vec3 a, Vec3 b, double t) {
+        return new Vec3(a.x * (1.0 - t) + b.x * t,
+            a.y * (1.0 - t) + b.y * t,
+            a.z * (1.0 - t) + b.z * t);
+    }
+
+    private Vec3 normalize(Vec3 v) {
+        double length = Math.sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+        if (length < 1.0e-12) return new Vec3(0.0, 0.0, 1.0);
+        return new Vec3(v.x / length, v.y / length, v.z / length);
+    }
+
+    private static final class Vec3 {
+        final double x;
+        final double y;
+        final double z;
+
+        Vec3(double x, double y, double z) {
+            this.x = x;
+            this.y = y;
+            this.z = z;
+        }
     }
 
     private void initProgramAndQuad() {
