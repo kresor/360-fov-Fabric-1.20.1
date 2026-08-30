@@ -1,12 +1,11 @@
-# Attempt 13 - separate first-person hand overlay
+# Attempt 14 - avoid stale upstream invoker collision
 
-Attempt 12's world projection and dynamic face culling are retained unchanged.
+Attempt 13's build log showed GitHub was still compiling the original 26.x `GameRendererInvoker.java`, which contains modern renderer APIs unavailable in 1.20.1.
 
-The first-person hand/held item is no longer rendered into the 90-degree front cubemap face. That caused the hand to be visibly chopped at the front-face boundary on a 32:9 display.
+This pass renames the new 1.20.1 invoker to **HandRendererInvoker.java** and updates all references. The stale upstream file can remain in the repository because `build.gradle` no longer includes it.
 
-Instead:
-1. all cubemap world captures run with `renderHand=false`;
-2. the world is reprojected exactly as in Attempt 12;
-3. vanilla `GameRenderer.renderHand(...)` is invoked once afterward via a Mixin invoker.
-
-Expected result: same clear Attempt-12 world image/performance, but a complete, sharp first-person hand/item with no cubemap-face clipping.
+Behavior goal remains unchanged from Attempt 13:
+- keep Attempt 12's quality-preserving face culling
+- render cubemap faces without the first-person hand
+- reproject the world
+- render the hand/item once afterward as a normal screen-space overlay

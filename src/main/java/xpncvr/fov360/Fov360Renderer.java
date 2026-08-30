@@ -3,6 +3,7 @@ package xpncvr.fov360;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.gl.Framebuffer;
 import net.minecraft.client.render.GameRenderer;
+import xpncvr.fov360.mixin.HandRendererInvoker;
 import net.minecraft.client.util.math.MatrixStack;
 import net.minecraft.entity.Entity;
 import org.lwjgl.BufferUtils;
@@ -96,21 +97,29 @@ public final class Fov360Renderer {
                 copyFace(framebuffer, face);
             }
 
-            // Front face. Restore the caller's hand-rendering state so the
-            // held item/hand is captured once rather than six times. This is a
-            // pragmatic 1.20.1 implementation; a later pass can render the hand
-            // after reprojection if a mod exposes edge cases here.
-            gameRenderer.setRenderHand(renderHand);
+            // Front face is world-only as well. Rendering the first-person
+            // hand inside the 90 degree front cubemap face clips it at that
+            // face boundary on 32:9. We composite the hand once, after the
+            // world has been reprojected to the final screen.
+            gameRenderer.setRenderHand(false);
             setFace(cameraEntity, viewYaw, 0);
             gameRenderer.renderWorld(tickDelta, limitTime, matrices);
             copyFace(framebuffer, 0);
 
-            // Restore player/camera entity before any GUI/input code continues.
+            // Restore player/camera entity before final reprojection/overlay.
             restoreEntity(cameraEntity, savedYaw, savedPitch, savedPrevYaw, savedPrevPitch);
-            gameRenderer.setRenderHand(renderHand);
             CAPTURING = false;
 
             reproject(framebuffer, projectedFov, aspect, viewPitch);
+
+            // Render the hand/held item once in normal screen space after the
+            // panoramic world pass. This keeps the hand sharp and prevents it
+            // from being chopped by cubemap face edges. Vanilla renderHand
+            // also owns the normal first-person transforms for maps/items.
+            gameRenderer.setRenderHand(renderHand);
+            if (renderHand) {
+                ((HandRendererInvoker) gameRenderer).fov360$renderHand(new MatrixStack(), gameRenderer.getCamera(), tickDelta);
+            }
         } catch (Throwable t) {
             failed = true;
             Main.LOGGER.error("360 FOV 1.20.1 renderer failed; falling back to vanilla rendering on later frames", t);

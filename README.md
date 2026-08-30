@@ -1,10 +1,5 @@
-# 360 FOV Fabric 1.20.1 - Attempt 13
+# 360 FOV Fabric 1.20.1 - Attempt 14
 
-Quality-preserving ultrawide projection with dynamic cubemap face culling, plus a separate post-projection first-person hand pass.
+Build-fix pass for the first-person hand overlay introduced in Attempt 13.
 
-Recommended test:
-- 5120x1440
-- FOV 120
-- shaders off
-- compare world quality/performance to Attempt 12
-- check hand, maps, tools and held blocks for clipping
+The only substantive change is using a uniquely named 1.20.1 mixin invoker (`HandRendererInvoker`) so the fork's stale upstream 26.x `GameRendererInvoker.java` cannot be compiled by mistake.
