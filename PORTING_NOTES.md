@@ -31,3 +31,12 @@ Use the GitHub Action `Build Fabric 1.20.1 port` to get the first compiler/mixin
 - CI uses `--refresh-dependencies` to avoid restoring a broken/stale dependency from Gradle cache.
 
 Expected next failure: Java compile errors caused by Minecraft 26.2 rendering APIs that do not exist in 1.20.1. That is progress: it means the build toolchain is finally configured and the renderer backport can begin.
+
+
+## Attempt 4
+
+The build system now reaches `compileJava`, but the Mixin annotation processor stops early on classes that do not exist in Minecraft 1.20.1 (for example `LevelExtractor`, `SubmitNodeCollection`, `SkyRenderer`, `AtmosphericFogEnvironment`, and `GuiRenderer`).
+
+Attempt 4 is intentionally a diagnostic pass. It disables only the Mixin annotation processor's target validator and raises javac's error limit so GitHub Actions emits the complete 26.2 -> 1.20.1 API mismatch list in one run. This does **not** make invalid mixins load at runtime; it is only to collect the information needed for the real renderer rewrite.
+
+The workflow also uploads `attempt4-build.log` as an artifact even when compilation fails.

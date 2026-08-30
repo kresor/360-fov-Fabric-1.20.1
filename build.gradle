@@ -33,6 +33,14 @@ processResources {
 
 tasks.withType(JavaCompile).configureEach {
 	it.options.release = 17
+	// Diagnostic porting pass: the 26.2 source references mixin targets that do not
+	// exist in 1.20.1. Disable the AP target validator so javac can report the full
+	// set of API incompatibilities in one run instead of stopping at the first five.
+	it.options.compilerArgs += [
+		"-AdisableTargetValidator=true",
+		"-Xmaxerrs", "1000",
+		"-Xmaxwarns", "1000"
+	]
 }
 
 java {
